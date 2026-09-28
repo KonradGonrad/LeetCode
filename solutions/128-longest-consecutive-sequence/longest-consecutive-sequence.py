@@ -1,26 +1,24 @@
 class Solution:
     def longestConsecutive(self, nums: List[int]) -> int:
+        n = len(nums)
 
-      # set of nums that is consisted of the digits without the duplicates, so we can omit the num1 == num2: continue
-      num_set = set(nums)
-      max_cnt = 0
+        if n == 0:
+          return 0
 
-      for num in num_set:
-        # if the starting digit 
-        if (num - 1) not in num_set:
-          # current stats for digit and count 
-          current_num = num
-          current_cnt = 1
+        nums = sorted(nums)
+        max_cnt = 1
+        cnt = 1
 
-          # for each digit we search for continous sequence
-          while (
-              current_num +1 # while there is an digit that is greater by 1 than the current we can add both count and the digit that we already find out 
-          ) in num_set:
-            current_num += 1
-            current_cnt += 1
+        for i in range(1, n):
+          if nums[i] == nums[i - 1]:
+            continue
+          elif nums[i] == nums[i - 1] + 1:
+            cnt += 1
+            if cnt > max_cnt:
+              max_cnt = cnt
+          else:
+            cnt = 1
 
-          # where we cannot find any other greater digit we just simply assign our count if its greater that the current max with current count from while loop
-          max_cnt = max(max_cnt, current_cnt)
 
-        # After all nums in num_set we return max_count
-      return max_cnt
+
+        return max_cnt
