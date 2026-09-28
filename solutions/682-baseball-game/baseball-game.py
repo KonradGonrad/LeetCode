@@ -4,9 +4,7 @@ class Solution:
       
 
       for i in range(len(operations)):
-
-        print(i, temp, total)
-
+        
         if operations[i] == '+':
             temp.append(
                 int(temp[-2]) + int(temp[-1])
