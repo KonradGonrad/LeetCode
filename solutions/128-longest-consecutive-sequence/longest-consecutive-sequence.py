@@ -19,6 +19,4 @@ class Solution:
           else:
             cnt = 1
 
-
-
         return max_cnt
