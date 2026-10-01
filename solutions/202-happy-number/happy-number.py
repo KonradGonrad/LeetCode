@@ -1,7 +1,9 @@
 class Solution:
     def isHappy(self, n: int) -> bool:
+        if n == 1:
+            return True
+        
         seen = set()
-
 
         while n != 1:
           seen.add(n)
@@ -12,4 +14,5 @@ class Solution:
 
           if n in seen:
             return False
-        return n == 1
+          if n == 1:
+            return True
