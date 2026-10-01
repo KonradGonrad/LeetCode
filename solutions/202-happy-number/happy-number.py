@@ -5,7 +5,6 @@ class Solution:
         
         seen = set()
 
-
         while n != 1:
           seen.add(n)
 
