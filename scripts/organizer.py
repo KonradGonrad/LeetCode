@@ -5,6 +5,7 @@ import html
 import os
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import quote
@@ -34,6 +35,41 @@ CODE_EXTENSIONS = {
     ".h", ".hpp", ".cs", ".go", ".rs", ".rb", ".php", ".swift",
     ".kt", ".scala", ".dart", ".r", ".sh",
 }
+
+
+def git(*args, check=True):
+    return subprocess.run(
+        ["git", "--literal-pathspecs", *args], cwd=ROOT,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", check=check,
+    )
+
+
+def commit_paths(message, *paths):
+    """Commit only these paths, leaving unrelated staged changes alone."""
+    relative = [path.relative_to(ROOT).as_posix() for path in paths]
+    git("add", "-A", "--", *relative)
+    diff = git("diff", "--cached", "--quiet", "--", *relative, check=False)
+    if diff.returncode == 0:
+        print("Brak zmian do zacommitowania.")
+        return False
+    if diff.returncode != 1:
+        diff.check_returncode()
+    # --only also excludes changes staged by an earlier failed task.
+    result = git(
+        "commit", "--only", "--cleanup=verbatim", "-m", message,
+        "--", *relative,
+    )
+    print(result.stdout.strip())
+    return True
+
+
+def report_error(context, error):
+    if isinstance(error, subprocess.CalledProcessError):
+        detail = (error.stderr or error.stdout or str(error)).strip()
+    else:
+        detail = str(error)
+    print(f"{context}: {detail}", file=sys.stderr)
 
 
 def walk_error(error):
@@ -193,10 +229,11 @@ def generate_table():
                 "| Zadanie | Kod | Notatki |", "| --- | --- | --- |",
             ]
             for task in tasks:
-                ensure_notes(task)
+                notes = task / "notes.md"
+                notes_link = link(notes, "Notatki") if notes.is_file() else "—"
                 rows.append(
                     f"| {markdown_label(task.name)} | {code_links(task)} "
-                    f"| {link(task / 'notes.md', 'Notatki')} |"
+                    f"| {notes_link} |"
                 )
             rows.extend(["", "</details>"])
             patterns.append("\n".join(rows))
@@ -225,15 +262,36 @@ def main():
                 "uporządkowaną parę START_TABLE / END_TABLE."
             )
         tasks = discover_tasks()
+        errors = completed = 0
         for source in tasks:
-            match = TASK_PATTERN.fullmatch(source.name)
-            key = f"{int(match.group(1))}-{match.group(2)}"
-            target = ROOT / CATEGORY_MAP.get(key, DEFAULT_CATEGORY) / source.name
-            validate_move(source, target)
-            move_tree(source, target)
-            ensure_notes(target)
-            print(f"Zorganizowano: {target.relative_to(ROOT)}")
-        remove_empty_directories()
+            try:
+                message = git(
+                    "log", "-1", "--pretty=%B", "--",
+                    source.relative_to(ROOT).as_posix(),
+                ).stdout.rstrip("\n")
+                if not message.strip():
+                    raise ValueError(
+                        "Brak wiadomości commitu w historii zadania; "
+                        "najpierw zapisz rozwiązanie w Git."
+                    )
+                match = TASK_PATTERN.fullmatch(source.name)
+                key = f"{int(match.group(1))}-{match.group(2)}"
+                target = ROOT / CATEGORY_MAP.get(key, DEFAULT_CATEGORY) / source.name
+                validate_move(source, target)
+                move_tree(source, target)
+                ensure_notes(target)
+                commit_paths(message, source, target)
+                completed += 1
+                print(f"Zorganizowano: {target.relative_to(ROOT)}")
+            except (OSError, UnicodeError, ValueError, shutil.Error,
+                    subprocess.SubprocessError) as error:
+                errors += 1
+                report_error(f"Błąd zadania {source.name}", error)
+        try:
+            remove_empty_directories()
+        except (OSError, ValueError) as error:
+            errors += 1
+            report_error("Nie usunięto całego solutions/", error)
         table = generate_table()
         updated = re.sub(
             TABLE_PATTERN, lambda _: f"{START}\n\n{table}\n\n{END}",
@@ -241,10 +299,12 @@ def main():
         )
         if updated != original:
             README.write_text(updated, encoding="utf-8")
-        print(f"Gotowe: {len(tasks)} folderów; README zaktualizowany.")
-        return 0
-    except (OSError, UnicodeError, ValueError, shutil.Error) as error:
-        print(f"Błąd organizatora: {error}", file=sys.stderr)
+        commit_paths("Aktualizacja pliku README", README)
+        print(f"Gotowe: {completed}/{len(tasks)} folderów; błędy: {errors}.")
+        return 1 if errors else 0
+    except (OSError, UnicodeError, ValueError, shutil.Error,
+            subprocess.SubprocessError) as error:
+        report_error("Błąd organizatora", error)
         return 1
 
 
