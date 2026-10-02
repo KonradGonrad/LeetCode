@@ -69,8 +69,14 @@
 
 ## Automatyzacja
 
-Push zmian w `solutions/**` na `main` uruchamia organizator i aktualizację tabeli.
+Push zmian w `solutions/**` na `test` uruchamia organizator i aktualizację tabeli.
 Lokalnie organizator można uruchomić poleceniem `python3 scripts/organizer.py`.
+Skrypt tworzy osobny commit dla każdego zadania, kopiując ostatnią wiadomość
+commitu z jego ścieżki w `solutions/`, oraz osobny commit `Aktualizacja pliku README`.
+Wymaga skonfigurowanych `git user.name` i `git user.email` oraz rozwiązań zapisanych
+wcześniej w Git. Pomija commity bez zmian i nie dołącza innych zmian ze stagingu.
+Błędy zadań są raportowane bez przerywania pętli; jeśli wystąpi błąd, workflow
+kończy się niepowodzeniem i nie wykonuje pusha. Sam skrypt nie wysyła commitów.
 
 ## Fiszki Anki
 
