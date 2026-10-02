@@ -7,13 +7,16 @@ class Solution:
         
         
         prefix = ''
-        i = 0
-
-        while i < len(strs[0]) and all(
-            word.startswith(prefix + strs[0][i]) for word in strs
-        ):
-            prefix += strs[0][i]
-            i += 1
         
+        minString = strs.index(
+            min(strs, key=len)
+        )
+
+        for i in range(len(strs[minString])):
+          chr = strs[minString][i]
+          if all(a[i] == chr for a in strs):
+            prefix += chr
+          else:
+            break
         return prefix
 
