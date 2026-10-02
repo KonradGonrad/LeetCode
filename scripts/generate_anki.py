@@ -20,7 +20,7 @@ DECK_ID = 1986543207
 def main():
     if genanki is None:
         print(
-            "Brak genanki. Zainstaluj: python -m pip install genanki",
+            "genanki is not installed. Run: python -m pip install genanki",
             file=sys.stderr,
         )
         return 1
@@ -46,7 +46,7 @@ def main():
                     continue
                 _, front, back = parsed
                 if front in seen_fronts:
-                    raise ValueError("Pytanie Front powtarza się w repozytorium.")
+                    raise ValueError("Duplicate Front question in the repository.")
                 seen_fronts.add(front)
                 note = genanki.Note(
                     model=model,
@@ -58,23 +58,23 @@ def main():
                 added += 1
             except (OSError, UnicodeError, ValueError) as error:
                 errors += 1
-                print(f"Błąd {path}: {error}", file=sys.stderr)
+                print(f"Error in {path}: {error}", file=sys.stderr)
         if errors:
             print(
-                f"Eksport przerwany: {errors} błędów. "
-                "Istniejący plik APKG pozostaje bez zmian.", file=sys.stderr,
+                f"Export aborted: {errors} errors. "
+                "The existing APKG file has not been changed.", file=sys.stderr,
             )
             return 1
         if not added:
-            print(f"Brak gotowych fiszek. Pominięto: {skipped}.")
+            print(f"No completed flashcards found. Skipped: {skipped}.")
             return 0
         output = ROOT / "LeetCode_Deck.apkg"
         genanki.Package(my_deck).write_to_file(str(output))
-        print(f"Zapisano: {output}")
-        print(f"Fiszki: {added}; pominięte szablony: {skipped}.")
+        print(f"Saved: {output}")
+        print(f"Flashcards: {added}; skipped templates: {skipped}.")
         return 0
     except Exception as error:
-        print(f"Błąd eksportu APKG: {error}", file=sys.stderr)
+        print(f"APKG export error: {error}", file=sys.stderr)
         return 1
 
 

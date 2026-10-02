@@ -52,7 +52,7 @@ def commit_paths(message, *paths):
     git("add", "-A", "--", *relative)
     diff = git("diff", "--cached", "--quiet", "--", *relative, check=False)
     if diff.returncode == 0:
-        print("Brak zmian do zacommitowania.")
+        print("No changes to commit.")
         return False
     if diff.returncode != 1:
         diff.check_returncode()
@@ -80,7 +80,7 @@ def find_leetsync_commit(source):
         "--diff-filter=AM", "--", source.relative_to(ROOT).as_posix(),
     ).stdout.strip()
     if not revision:
-        print(f"Brak commitu LeetSync dla {source.name}; zachowuję zwykły commit.")
+        print(f"No LeetSync commit found for {source.name}; keeping the regular commit.")
         return None
     message = git("show", "-s", "--format=%B", revision).stdout.rstrip("\n")
     return revision, message
@@ -121,7 +121,7 @@ def check_path(path):
     for part in path.relative_to(ROOT).parts:
         current /= part
         if current.is_symlink():
-            raise ValueError(f"Niedozwolone dowiązanie: {current}")
+            raise ValueError(f"Symbolic links are not allowed: {current}")
 
 
 def discover_tasks():
@@ -145,18 +145,18 @@ def validate_move(source, target):
     check_path(target)
     if source.is_dir():
         if target.exists() and not target.is_dir():
-            raise ValueError(f"Konflikt katalog/plik: {target}")
+            raise ValueError(f"Directory/file conflict: {target}")
         for child in source.iterdir():
             validate_move(child, target / child.name)
     else:
         if not source.is_file():
-            raise ValueError(f"Nieobsługiwany plik: {source}")
+            raise ValueError(f"Unsupported file: {source}")
         if target.exists() and not target.is_file():
-            raise ValueError(f"Konflikt plik/katalog: {target}")
+            raise ValueError(f"File/directory conflict: {target}")
         if source.name == "notes.md" and target.exists():
             raise ValueError(
-                f"Obie lokalizacje zawierają notes.md: {source}, {target}. "
-                "Połącz notatki ręcznie."
+                f"Both locations contain notes.md: {source}, {target}. "
+                "Merge the notes manually."
             )
 
 
@@ -178,7 +178,7 @@ def ensure_notes(task):
     check_path(notes)
     if notes.exists():
         if not notes.is_file():
-            raise ValueError(f"notes.md nie jest plikiem: {notes}")
+            raise ValueError(f"notes.md is not a file: {notes}")
         return
     name = task.name
     template = (
@@ -186,9 +186,9 @@ def ensure_notes(task):
         "- **Link:** \n"
         "- **Time Complexity:** O()\n"
         "- **Space Complexity:** O()\n"
-        "- **Intuicja:** \n\n"
-        "## Anki Fiszka\n"
-        f"**Front:** Jak optymalnie rozwiązać {name}?\n"
+        "- **Intuition:** \n\n"
+        "## Anki Flashcard\n"
+        f"**Front:** How can you solve {name} optimally?\n"
         "**Back:** \n"
     )
     with notes.open("x", encoding="utf-8") as handle:
@@ -203,8 +203,8 @@ def remove_empty_directories():
             path.rmdir()
     if SOLUTIONS.exists():
         raise ValueError(
-            "W solutions/ pozostały nierozpoznane pliki lub dowiązania. "
-            "Zachowano je; sprawdź ich strukturę."
+            "Unrecognized files or symbolic links remain in solutions/. "
+            "They have been preserved; check their structure."
         )
 
 
@@ -240,57 +240,98 @@ def code_links(task):
     ) or "—"
 
 
+def submission_result(task):
+    """Prefer recorded LeetSync metadata, falling back to path history."""
+    message = ""
+    metadata = task / ".leetsync.json"
+    if metadata.is_file() and not metadata.is_symlink():
+        try:
+            data = json.loads(metadata.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and isinstance(data.get("message"), str):
+                message = data["message"]
+        except (OSError, UnicodeError, ValueError) as error:
+            report_error(f"Could not read submission metadata for {task.name}", error)
+    if not message.strip():
+        try:
+            message = git(
+                "log", "-1", "--format=%B", "--fixed-strings",
+                "--grep=LeetSync", "--diff-filter=AM", "--",
+                task.relative_to(ROOT).as_posix(), f"solutions/{task.name}",
+            ).stdout
+        except (OSError, UnicodeError, subprocess.SubprocessError) as error:
+            report_error(f"Could not read submission history for {task.name}", error)
+    message = re.sub(r" - LeetSync\s*$", "", message.strip())
+    return "<br>".join(markdown_label(line) for line in message.splitlines()) or "—"
+
+
 def generate_table():
-    sections = []
+    groups = {}
     for category in directories(ROOT):
         if category.name in {"solutions", "scripts"}:
             continue
-        patterns = []
         for pattern in directories(category):
-            tasks = sorted(
-                (task for task in directories(pattern)
-                 if TASK_PATTERN.fullmatch(task.name)),
-                key=task_sort_key,
-            )
-            if not tasks:
+            for task in directories(pattern):
+                if TASK_PATTERN.fullmatch(task.name):
+                    groups.setdefault((category.name, pattern.name), {})[task.name] = task
+
+    # Pending submissions remain browsable before the organizer runs.
+    if SOLUTIONS.is_dir():
+        for task in discover_tasks():
+            match = TASK_PATTERN.fullmatch(task.name)
+            key = f"{int(match.group(1))}-{match.group(2)}"
+            category, pattern = CATEGORY_MAP.get(key, DEFAULT_CATEGORY).split("/")
+            groups.setdefault((category, pattern), {})[task.name] = task
+
+    sections = []
+    for category in sorted({category for category, _ in groups}, key=str.casefold):
+        patterns = []
+        total = 0
+        for (main_category, pattern), entries in sorted(groups.items()):
+            if main_category != category:
                 continue
-            heading = html.escape(pattern.name.replace("_", " "))
+            tasks = sorted(entries.values(), key=task_sort_key)
+            total += len(tasks)
+            heading = html.escape(pattern.replace("_", " "))
+            label = "problem" if len(tasks) == 1 else "problems"
             rows = [
-                f"<details><summary><b>{heading}</b></summary>", "",
-                "| Zadanie | Kod | Notatki |", "| --- | --- | --- |",
+                f"<details><summary><b>{heading}</b> · {len(tasks)} {label}</summary>", "",
+                "| Problem | Code | Notes | Time |", "| --- | --- | --- | --- |",
             ]
             for task in tasks:
                 notes = task / "notes.md"
-                notes_link = link(notes, "Notatki") if notes.is_file() else "—"
+                notes_link = link(notes, "Notes") if notes.is_file() else "—"
                 rows.append(
                     f"| {markdown_label(task.name)} | {code_links(task)} "
-                    f"| {notes_link} |"
+                    f"| {notes_link} | {submission_result(task)} |"
                 )
             rows.extend(["", "</details>"])
             patterns.append("\n".join(rows))
         if patterns:
+            label = "problem" if total == 1 else "problems"
             sections.append(
-                f"### {markdown_label(category.name)}\n\n"
+                f"<details>\n<summary><strong>{html.escape(category)}</strong>"
+                f" · {total} {label}</summary>\n\n"
                 + "\n\n".join(patterns)
+                + "\n\n</details>"
             )
-    return "\n\n".join(sections) or "_Brak rozwiązanych zadań._"
+    return "\n\n".join(sections) or "_No solved problems yet._"
 
 
 def main():
     try:
         check_path(SOLUTIONS)
         if not SOLUTIONS.exists():
-            print("Brak folderu solutions/ — nic do zorganizowania.")
+            print("No solutions/ directory found — nothing to organize.")
             return 0
         if not SOLUTIONS.is_dir():
-            raise ValueError("solutions istnieje, ale nie jest katalogiem.")
+            raise ValueError("solutions exists but is not a directory.")
         check_path(README)
         original = README.read_text(encoding="utf-8")
         if (original.count(START) != 1 or original.count(END) != 1
                 or original.index(START) >= original.index(END)):
             raise ValueError(
-                "README.md musi zawierać dokładnie jedną poprawnie "
-                "uporządkowaną parę START_TABLE / END_TABLE."
+                "README.md must contain exactly one correctly ordered "
+                "pair of START_TABLE / END_TABLE markers."
             )
         tasks = discover_tasks()
         errors = completed = 0
@@ -302,8 +343,8 @@ def main():
                 ).stdout.rstrip("\n")
                 if not message.strip():
                     raise ValueError(
-                        "Brak wiadomości commitu w historii zadania; "
-                        "najpierw zapisz rozwiązanie w Git."
+                        "No commit message found in the problem's history; "
+                        "commit the solution to Git first."
                     )
                 origin = find_leetsync_commit(source)
                 match = TASK_PATTERN.fullmatch(source.name)
@@ -316,16 +357,16 @@ def main():
                 if origin is not None:
                     commit_leetsync_origin(target, origin)
                 completed += 1
-                print(f"Zorganizowano: {target.relative_to(ROOT)}")
+                print(f"Organized: {target.relative_to(ROOT)}")
             except (OSError, UnicodeError, ValueError, shutil.Error,
                     subprocess.SubprocessError) as error:
                 errors += 1
-                report_error(f"Błąd zadania {source.name}", error)
+                report_error(f"Error processing {source.name}", error)
         try:
             remove_empty_directories()
         except (OSError, ValueError) as error:
             errors += 1
-            report_error("Nie usunięto całego solutions/", error)
+            report_error("Could not completely remove solutions/", error)
         table = generate_table()
         updated = re.sub(
             TABLE_PATTERN, lambda _: f"{START}\n\n{table}\n\n{END}",
@@ -333,12 +374,12 @@ def main():
         )
         if updated != original:
             README.write_text(updated, encoding="utf-8")
-        commit_paths("Aktualizacja pliku README", README)
-        print(f"Gotowe: {completed}/{len(tasks)} folderów; błędy: {errors}.")
+        commit_paths("Update README", README)
+        print(f"Done: {completed}/{len(tasks)} directories; errors: {errors}.")
         return 1 if errors else 0
     except (OSError, UnicodeError, ValueError, shutil.Error,
             subprocess.SubprocessError) as error:
-        report_error("Błąd organizatora", error)
+        report_error("Organizer error", error)
         return 1
 
 
