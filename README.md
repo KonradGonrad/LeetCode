@@ -73,6 +73,13 @@ Push zmian w `solutions/**` na `test` uruchamia organizator i aktualizację tabe
 Lokalnie organizator można uruchomić poleceniem `python3 scripts/organizer.py`.
 Skrypt tworzy osobny commit dla każdego zadania, kopiując ostatnią wiadomość
 commitu z jego ścieżki w `solutions/`, oraz osobny commit `Aktualizacja pliku README`.
+Po przeniesieniu wykonuje dodatkowy commit z wiadomością ostatniego commitu
+oznaczonego `LeetSync` w historii źródłowego zadania. Ten commit zapisuje
+`.leetsync.json` w docelowym folderze: identyfikator źródłowego commitu,
+jego wiadomość i identyfikator commitu organizującego pliki. Jest to rzeczywista
+zmiana w folderze, więc jego ostatni commit ma wiadomość LeetSync także po
+wcześniejszym zbiorczym przywróceniu rozwiązań. Jeśli historia nie zawiera
+commitu oznaczonego `LeetSync`, skrypt zgłasza to i zachowuje zwykły commit.
 Wymaga skonfigurowanych `git user.name` i `git user.email` oraz rozwiązań zapisanych
 wcześniej w Git. Pomija commity bez zmian i nie dołącza innych zmian ze stagingu.
 Błędy zadań są raportowane bez przerywania pętli; jeśli wystąpi błąd, workflow

@@ -2,6 +2,7 @@
 """Organize LeetSync solutions and refresh the generated README table."""
 
 import html
+import json
 import os
 import re
 import shutil
@@ -70,6 +71,36 @@ def report_error(context, error):
     else:
         detail = str(error)
     print(f"{context}: {detail}", file=sys.stderr)
+
+
+def find_leetsync_commit(source):
+    """Skip later restore/organizer commits when locating submission metadata."""
+    revision = git(
+        "log", "-1", "--format=%H", "--fixed-strings", "--grep=LeetSync",
+        "--diff-filter=AM", "--", source.relative_to(ROOT).as_posix(),
+    ).stdout.strip()
+    if not revision:
+        print(f"Brak commitu LeetSync dla {source.name}; zachowuję zwykły commit.")
+        return None
+    message = git("show", "-s", "--format=%B", revision).stdout.rstrip("\n")
+    return revision, message
+
+
+def commit_leetsync_origin(target, origin):
+    """A real file change makes the extra commit visible in folder history."""
+    revision, message = origin
+    metadata = target / ".leetsync.json"
+    check_path(metadata)
+    data = {
+        "source_commit": revision,
+        "message": message,
+        # Also changes when an identical solution is moved again.
+        "organization_commit": git("rev-parse", "HEAD").stdout.strip(),
+    }
+    metadata.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    commit_paths(message, metadata)
 
 
 def walk_error(error):
@@ -274,6 +305,7 @@ def main():
                         "Brak wiadomości commitu w historii zadania; "
                         "najpierw zapisz rozwiązanie w Git."
                     )
+                origin = find_leetsync_commit(source)
                 match = TASK_PATTERN.fullmatch(source.name)
                 key = f"{int(match.group(1))}-{match.group(2)}"
                 target = ROOT / CATEGORY_MAP.get(key, DEFAULT_CATEGORY) / source.name
@@ -281,6 +313,8 @@ def main():
                 move_tree(source, target)
                 ensure_notes(target)
                 commit_paths(message, source, target)
+                if origin is not None:
+                    commit_leetsync_origin(target, origin)
                 completed += 1
                 print(f"Zorganizowano: {target.relative_to(ROOT)}")
             except (OSError, UnicodeError, ValueError, shutil.Error,

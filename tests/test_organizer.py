@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import json
 import os
 import subprocess
 import tempfile
@@ -111,6 +112,40 @@ class OrganizerTests(unittest.TestCase):
         self.assertTrue(path.exists())
         self.assertTrue((self.root / "Algorithm/Two_Pointers/125-valid-palindrome/solution.py").exists())
         self.assertEqual(self.git("log", "-1", "--pretty=%B").strip(), "Aktualizacja pliku README")
+
+    def test_restored_task_gets_original_leetsync_message_on_destination(self):
+        message = "Time: 3 ms (53.54%) | Memory: 20.6 MB (19.09%) - LeetSync"
+        self.task("1-two-sum", message)
+        original = self.git("rev-parse", "HEAD").strip()
+        self.git("rm", "-r", "solutions/1-two-sum")
+        self.git("commit", "-qm", "Automatyczna organizacja")
+        self.git("restore", f"--source={original}", "--", "solutions/1-two-sum")
+        self.git("add", "solutions")
+        self.git("commit", "-qm", "Przywrócenie folderu solutions z main")
+        before = self.git("rev-parse", "HEAD").strip()
+        self.assertEqual(self.run_organizer(), 0)
+        target = "Algorithm/Arrays_and_Hashing/1-two-sum"
+        self.assertEqual(self.git("log", "-1", "--pretty=%B", "--", target).strip(), message)
+        commits = self.git("rev-list", "--reverse", f"{before}..HEAD").splitlines()
+        self.assertEqual(len(commits), 3)
+        self.assertEqual(
+            self.git("show", "--pretty=", "--name-only", commits[1]).strip(),
+            f"{target}/.leetsync.json",
+        )
+        metadata = json.loads((self.root / target / ".leetsync.json").read_text())
+        self.assertEqual(metadata["source_commit"], original)
+        self.assertEqual(metadata["message"], message)
+        self.assertEqual(metadata["organization_commit"], commits[0])
+        # A later bulk restore of identical code still gets a folder commit.
+        self.git("restore", f"--source={original}", "--", "solutions/1-two-sum")
+        self.git("add", "solutions")
+        self.git("commit", "-qm", "Ponowne przywrócenie")
+        self.assertEqual(self.run_organizer(), 0)
+        self.assertEqual(self.git("log", "-1", "--pretty=%B", "--", target).strip(), message)
+        self.assertEqual(
+            json.loads((self.root / target / ".leetsync.json").read_text())["source_commit"],
+            original,
+        )
 
 
 if __name__ == "__main__":
