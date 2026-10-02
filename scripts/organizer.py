@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
-from functools import lru_cache
+import tempfile
 from pathlib import Path
 from urllib.parse import quote
 
@@ -17,33 +17,21 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 SOLUTIONS = ROOT / "solutions"
 README = ROOT / "README.md"
-KNOWN_TASKS_CACHE = {
-    "1-two-sum": "Algorithm/Arrays_and_Hashing",
-    "49-group-anagrams": "Algorithm/Arrays_and_Hashing",
-    "125-valid-palindrome": "Algorithm/Two_Pointers",
-    "15-3sum": "Algorithm/Two_Pointers",
-    "20-valid-parentheses": "Algorithm/Stack",
-    "704-binary-search": "Algorithm/Binary_Search",
-    "175-combine-two-tables": "Database/Joins",
-    "183-customers-who-never-order": "Database/Joins",
-    "2887-fill-missing-data": "Pandas/Data_Manipulation",
-    "2888-reshape-data-concatenate": "Pandas/Data_Manipulation",
-}
-TAG_TO_FOLDER_MAP = {
-    "Database": "Database/Joins",
-    "Pandas": "Pandas/Data_Manipulation",
-    "Hash Table": "Algorithm/Arrays_and_Hashing",
-    "Two Pointers": "Algorithm/Two_Pointers",
-    "Stack": "Algorithm/Stack",
-    "Binary Search": "Algorithm/Binary_Search",
-    "Sliding Window": "Algorithm/Sliding_Window",
-    "Linked List": "Algorithm/Linked_List",
-    "Dynamic Programming": "Algorithm/Dynamic_Programming",
-    "Tree": "Algorithm/Trees",
-    "Graph": "Algorithm/Graphs",
-    "Heap (Priority Queue)": "Algorithm/Heap",
-    "Backtracking": "Algorithm/Backtracking",
-    "Array": "Algorithm/Arrays_and_Hashing",
+# Insertion order defines priority, independent of the API's tag order.
+BROAD_CATEGORIES = {
+    "Database": ["Database"],
+    "Pandas": ["Pandas"],
+    "Algorithm/Dynamic_Programming": ["Dynamic Programming", "Memoization"],
+    "Algorithm/Graphs": ["Graph", "Breadth-First Search", "Depth-First Search", "Union Find"],
+    "Algorithm/Trees": ["Tree", "Binary Tree", "Binary Search Tree", "Trie"],
+    "Algorithm/Backtracking": ["Backtracking"],
+    "Algorithm/Heap_Priority_Queue": ["Heap (Priority Queue)"],
+    "Algorithm/Binary_Search": ["Binary Search"],
+    "Algorithm/Stack_and_Queue": ["Stack", "Queue", "Monotonic Stack"],
+    "Algorithm/Linked_List": ["Linked List", "Doubly-Linked List"],
+    "Algorithm/Sliding_Window": ["Sliding Window"],
+    "Algorithm/Two_Pointers": ["Two Pointers"],
+    "Algorithm/Arrays_and_Hashing": ["Array", "String", "Hash Table", "Sorting", "Math"],
 }
 LEETCODE_GRAPHQL_URL = "https://leetcode.com/graphql"
 DEFAULT_CATEGORY = "Algorithm/Uncategorized"
@@ -105,20 +93,62 @@ def get_problem_tags(title_slug):
         return []
 
 
-@lru_cache(maxsize=None)
-def category_for_task(folder_name):
-    """Resolve each task once per process, including uncategorized results."""
+def load_category_cache():
+    """Reject corrupt data rather than overwrite an existing cache silently."""
+    path = ROOT / "scripts/leetcode_tags.json"
+    check_path(path)
+    if not path.exists():
+        return {}
+    cache = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(cache, dict):
+        raise ValueError("The LeetCode category cache must be a JSON object.")
+    for slug, category in cache.items():
+        if (not isinstance(slug, str) or not slug
+                or not isinstance(category, str)
+                or not re.fullmatch(r"[A-Za-z0-9_]+(?:/[A-Za-z0-9_]+)?", category)):
+            raise ValueError(f"Invalid category cache entry for {slug!r}.")
+    return cache
+
+
+def save_category_cache(cache, original):
+    """Atomically save learned categories, only when their contents changed."""
+    if cache == original:
+        return False
+    path = ROOT / "scripts/leetcode_tags.json"
+    check_path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent,
+            prefix=".leetcode_tags-", suffix=".tmp", delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump(cache, handle, ensure_ascii=False, indent=4)
+            handle.write("\n")
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+    return True
+
+
+def category_for_task(folder_name, cache):
+    """Use the slug cache first, then match broad categories by priority."""
     match = TASK_PATTERN.fullmatch(folder_name)
     if not match:
         return DEFAULT_CATEGORY
     title_slug = match.group(2)
-    key = f"{int(match.group(1))}-{title_slug}"
-    if key in KNOWN_TASKS_CACHE:
-        return KNOWN_TASKS_CACHE[key]
-    for tag in get_problem_tags(title_slug):
-        if tag in TAG_TO_FOLDER_MAP:
-            return TAG_TO_FOLDER_MAP[tag]
-    return DEFAULT_CATEGORY
+    if title_slug in cache:
+        return cache[title_slug]
+    tags = set(get_problem_tags(title_slug))
+    category = next(
+        (folder for folder, matching_tags in BROAD_CATEGORIES.items()
+         if tags.intersection(matching_tags)),
+        DEFAULT_CATEGORY,
+    )
+    cache[title_slug] = category
+    return category
 
 
 def git(*args, check=True):
@@ -347,12 +377,17 @@ def submission_result(task):
     return "<br>".join(markdown_label(line) for line in message.splitlines()) or "—"
 
 
-def generate_table():
+def generate_table(cache=None):
+    if cache is None:
+        cache = load_category_cache()
     groups = {}
     for category in directories(ROOT):
         if category.name in {"solutions", "scripts"}:
             continue
         for pattern in directories(category):
+            if TASK_PATTERN.fullmatch(pattern.name):
+                groups.setdefault((category.name, ""), {})[pattern.name] = pattern
+                continue
             for task in directories(pattern):
                 if TASK_PATTERN.fullmatch(task.name):
                     groups.setdefault((category.name, pattern.name), {})[task.name] = task
@@ -360,7 +395,7 @@ def generate_table():
     # Pending submissions remain browsable before the organizer runs.
     if SOLUTIONS.is_dir():
         for task in discover_tasks():
-            category, pattern = category_for_task(task.name).split("/")
+            category, _, pattern = category_for_task(task.name, cache).partition("/")
             groups.setdefault((category, pattern), {})[task.name] = task
 
     sections = []
@@ -374,8 +409,9 @@ def generate_table():
             total += len(tasks)
             heading = html.escape(pattern.replace("_", " "))
             label = "problem" if len(tasks) == 1 else "problems"
-            rows = [
+            rows = ([
                 f"<details><summary><b>{heading}</b> · {len(tasks)} {label}</summary>", "",
+            ] if pattern else []) + [
                 "| Problem | Code | Notes | Time |", "| --- | --- | --- | --- |",
             ]
             for task in tasks:
@@ -385,7 +421,8 @@ def generate_table():
                     f"| {markdown_label(task.name)} | {code_links(task)} "
                     f"| {notes_link} | {submission_result(task)} |"
                 )
-            rows.extend(["", "</details>"])
+            if pattern:
+                rows.extend(["", "</details>"])
             patterns.append("\n".join(rows))
         if patterns:
             label = "problem" if total == 1 else "problems"
@@ -400,6 +437,8 @@ def generate_table():
 
 def main():
     try:
+        cache = load_category_cache()
+        original_cache = cache.copy()
         check_path(SOLUTIONS)
         if not SOLUTIONS.exists():
             print("No solutions/ directory found — nothing to organize.")
@@ -428,7 +467,7 @@ def main():
                         "commit the solution to Git first."
                     )
                 origin = find_leetsync_commit(source)
-                target = ROOT / category_for_task(source.name) / source.name
+                target = ROOT / category_for_task(source.name, cache) / source.name
                 validate_move(source, target)
                 move_tree(source, target)
                 ensure_notes(target)
@@ -446,7 +485,9 @@ def main():
         except (OSError, ValueError) as error:
             errors += 1
             report_error("Could not completely remove solutions/", error)
-        table = generate_table()
+        table = generate_table(cache)
+        if save_category_cache(cache, original_cache):
+            commit_paths("Update LeetCode category cache", ROOT / "scripts/leetcode_tags.json")
         updated = re.sub(
             TABLE_PATTERN, lambda _: f"{START}\n\n{table}\n\n{END}",
             original, flags=re.DOTALL,
