@@ -1,0 +1,42 @@
+# .github/workflows/organize.yml
+name: Organizacja rozwiązań LeetCode
+
+on:
+  push:
+    branches:
+      - test
+    paths:
+      - "solutions/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: organize-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  organize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Pobierz repozytorium
+        uses: actions/checkout@v3
+        with:
+          ref: test
+          fetch-depth: 0
+      - name: Przygotuj Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+      - name: Zorganizuj rozwiązania i zaktualizuj README
+        run: python scripts/organizer.py
+      - name: Skonfiguruj bota Git
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+      - name: Dodaj zmiany
+        run: git add .
+      - name: Zapisz i wyślij zmiany
+        run: |
+          git diff --staged --quiet || (git commit -m "Automatyczna organizacja plików i aktualizacja README" && git push)
