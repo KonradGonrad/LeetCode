@@ -60,7 +60,7 @@ class OrganizerTests(unittest.TestCase):
             return organizer.main()
 
     def test_separate_messages_paths_and_unrelated_staging(self):
-        first = "Time: 0 ms\n\nMemory: 18 MB\nPolskie znaki: ąę"
+        first = "Time: 0 ms\n\nMemory: 18 MB\nUnicode characters: ąę"
         second = 'Time: 5 ms; "quoted" $(not-a-command)'
         self.task("1-two-sum", first)
         self.task("125-valid-palindrome", second)
@@ -71,7 +71,7 @@ class OrganizerTests(unittest.TestCase):
         commits = self.git("rev-list", "--reverse", f"{before}..HEAD").splitlines()
         self.assertEqual(len(commits), 3)
         messages = [self.git("log", "-1", "--pretty=%B", sha).rstrip("\n") for sha in commits]
-        self.assertEqual(messages, [first, second, "Aktualizacja pliku README"])
+        self.assertEqual(messages, [first, second, "Update README"])
         for sha, name, category in zip(commits[:2], ["1-two-sum", "125-valid-palindrome"], ["Arrays_and_Hashing", "Two_Pointers"]):
             paths = set(self.git("diff-tree", "--no-commit-id", "--name-only", "-r", "--no-renames", sha).splitlines())
             self.assertEqual(paths, {
@@ -111,17 +111,17 @@ class OrganizerTests(unittest.TestCase):
         self.assertEqual(self.run_organizer(), 1)
         self.assertTrue(path.exists())
         self.assertTrue((self.root / "Algorithm/Two_Pointers/125-valid-palindrome/solution.py").exists())
-        self.assertEqual(self.git("log", "-1", "--pretty=%B").strip(), "Aktualizacja pliku README")
+        self.assertEqual(self.git("log", "-1", "--pretty=%B").strip(), "Update README")
 
     def test_restored_task_gets_original_leetsync_message_on_destination(self):
         message = "Time: 3 ms (53.54%) | Memory: 20.6 MB (19.09%) - LeetSync"
         self.task("1-two-sum", message)
         original = self.git("rev-parse", "HEAD").strip()
         self.git("rm", "-r", "solutions/1-two-sum")
-        self.git("commit", "-qm", "Automatyczna organizacja")
+        self.git("commit", "-qm", "Automatic organization")
         self.git("restore", f"--source={original}", "--", "solutions/1-two-sum")
         self.git("add", "solutions")
-        self.git("commit", "-qm", "Przywrócenie folderu solutions z main")
+        self.git("commit", "-qm", "Restore solutions directory from main")
         before = self.git("rev-parse", "HEAD").strip()
         self.assertEqual(self.run_organizer(), 0)
         target = "Algorithm/Arrays_and_Hashing/1-two-sum"
@@ -139,7 +139,7 @@ class OrganizerTests(unittest.TestCase):
         # A later bulk restore of identical code still gets a folder commit.
         self.git("restore", f"--source={original}", "--", "solutions/1-two-sum")
         self.git("add", "solutions")
-        self.git("commit", "-qm", "Ponowne przywrócenie")
+        self.git("commit", "-qm", "Restore solutions again")
         self.assertEqual(self.run_organizer(), 0)
         self.assertEqual(self.git("log", "-1", "--pretty=%B", "--", target).strip(), message)
         self.assertEqual(

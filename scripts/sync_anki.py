@@ -42,16 +42,16 @@ def invoke_anki(action, **params):
         with OPENER.open(request, timeout=15) as response:
             result = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
-        raise AnkiError(f"HTTP {error.code} podczas {action}") from error
+        raise AnkiError(f"HTTP {error.code} during {action}") from error
     except (urllib.error.URLError, OSError) as error:
         raise ConnectionError(
-            "Uruchom Anki i zainstaluj AnkiConnect"
+            "Start Anki and install AnkiConnect"
         ) from error
     except (UnicodeError, json.JSONDecodeError) as error:
-        raise AnkiError("AnkiConnect zwrócił niepoprawny JSON.") from error
+        raise AnkiError("AnkiConnect returned invalid JSON.") from error
     if (not isinstance(result, dict)
             or "error" not in result or "result" not in result):
-        raise AnkiError("Niepoprawna struktura odpowiedzi AnkiConnect.")
+        raise AnkiError("Invalid AnkiConnect response structure.")
     if result["error"] is not None:
         raise AnkiError(f"{action}: {result['error']}")
     return result["result"]
@@ -104,14 +104,14 @@ def front_query(front):
 def select_model():
     models = invoke_anki("modelNames")
     if not isinstance(models, list):
-        raise AnkiError("modelNames nie zwróciło listy.")
+        raise AnkiError("modelNames did not return a list.")
     for name in ("Basic", FALLBACK_MODEL):
         if name in models:
             fields = invoke_anki("modelFieldNames", modelName=name)
             if isinstance(fields, list) and set(fields) == {"Front", "Back"}:
                 return name
             if name == FALLBACK_MODEL:
-                raise AnkiError(f"Model {FALLBACK_MODEL} ma niezgodne pola.")
+                raise AnkiError(f"Model {FALLBACK_MODEL} has incompatible fields.")
     invoke_anki(
         "createModel", modelName=FALLBACK_MODEL,
         inOrderFields=["Front", "Back"],
@@ -130,19 +130,19 @@ def read_back(ids):
     notes = invoke_anki("notesInfo", notes=ids)
     try:
         if not isinstance(notes, list) or len(notes) != 1:
-            raise ValueError("Oczekiwano jednej notatki.")
+            raise ValueError("Expected exactly one note.")
         value = notes[0]["fields"]["Back"]["value"]
         if not isinstance(value, str):
-            raise ValueError("Back nie jest tekstem.")
+            raise ValueError("Back is not text.")
         return value
     except (KeyError, TypeError, ValueError) as error:
-        raise AnkiError("Nie udało się odczytać pola Back fiszki.") from error
+        raise AnkiError("Could not read the note's Back field.") from error
 
 
 def sync_card(model_name, front, back):
     ids = invoke_anki("findNotes", query=front_query(front))
     if not isinstance(ids, list):
-        raise AnkiError("findNotes nie zwróciło listy.")
+        raise AnkiError("findNotes did not return a list.")
     expected_back = to_anki_html(back)
     if not ids:
         note_id = invoke_anki(
@@ -155,28 +155,28 @@ def sync_card(model_name, front, back):
             },
         )
         if not isinstance(note_id, int):
-            raise AnkiError("Anki nie potwierdziło dodania notatki.")
-        return "dodane"
+            raise AnkiError("Anki did not confirm that the note was added.")
+        return "added"
     if len(ids) != 1:
         raise AnkiError(
-            f"Znaleziono {len(ids)} fiszek z tym Front. Usuń duplikaty w Anki."
+            f"Found {len(ids)} notes with this Front. Remove duplicates in Anki."
         )
     if read_back(ids) == expected_back:
-        return "bez_zmian"
+        return "unchanged"
     invoke_anki(
         "updateNoteFields", note={"id": ids[0], "fields": {"Back": expected_back}}
     )
     if read_back(ids) != expected_back:
         raise AnkiError(
-            "Nie potwierdzono zapisu. Zamknij edycję fiszki w Anki "
-            "i spróbuj ponownie."
+            "Could not confirm the update. Close the note editor in Anki "
+            "and try again."
         )
-    return "zaktualizowane"
+    return "updated"
 
 
 def main():
     counts = dict.fromkeys(
-        ["dodane", "zaktualizowane", "bez_zmian", "pominięte", "błędy"], 0
+        ["added", "updated", "unchanged", "skipped", "errors"], 0
     )
     seen_fronts = set()
     try:
@@ -186,12 +186,12 @@ def main():
             try:
                 parsed = parse_notes(path)
                 if parsed is None:
-                    counts["pominięte"] += 1
-                    print(f"Pominięto niewypełnioną notatkę: {path}")
+                    counts["skipped"] += 1
+                    print(f"Skipped incomplete note: {path}")
                     continue
                 title, front, back = parsed
                 if front in seen_fronts:
-                    raise ValueError("Pytanie Front powtarza się w repozytorium.")
+                    raise ValueError("Duplicate Front question in the repository.")
                 seen_fronts.add(front)
                 status = sync_card(model_name, front, back)
                 counts[status] += 1
@@ -199,19 +199,19 @@ def main():
             except ConnectionError:
                 raise
             except (OSError, UnicodeError, ValueError, AnkiError) as error:
-                counts["błędy"] += 1
-                print(f"Błąd {path}: {error}", file=sys.stderr)
+                counts["errors"] += 1
+                print(f"Error in {path}: {error}", file=sys.stderr)
     except ConnectionError as error:
-        counts["błędy"] += 1
+        counts["errors"] += 1
         print(str(error), file=sys.stderr)
     except (OSError, AnkiError) as error:
-        counts["błędy"] += 1
-        print(f"Błąd synchronizacji: {error}", file=sys.stderr)
+        counts["errors"] += 1
+        print(f"Synchronization error: {error}", file=sys.stderr)
     finally:
-        print("\nPodsumowanie synchronizacji:")
+        print("\nSynchronization summary:")
         for label, count in counts.items():
             print(f"  {label.replace('_', ' ').capitalize()}: {count}")
-    return 1 if counts["błędy"] else 0
+    return 1 if counts["errors"] else 0
 
 
 if __name__ == "__main__":
