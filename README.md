@@ -1,2 +1,3 @@
-# LeetCode
-repository, where will be published my progress on LeetCode
+# LeetCode Summary
+
+![LeetCode Stats](https://leetcard.jacoblin.cool/KonradGonradLeetCode?theme=dark)
