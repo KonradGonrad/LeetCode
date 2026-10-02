@@ -8,13 +8,16 @@ import re
 import shutil
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote
+
+import requests
 
 ROOT = Path(__file__).resolve().parents[1]
 SOLUTIONS = ROOT / "solutions"
 README = ROOT / "README.md"
-CATEGORY_MAP = {
+KNOWN_TASKS_CACHE = {
     "1-two-sum": "Algorithm/Arrays_and_Hashing",
     "49-group-anagrams": "Algorithm/Arrays_and_Hashing",
     "125-valid-palindrome": "Algorithm/Two_Pointers",
@@ -26,6 +29,23 @@ CATEGORY_MAP = {
     "2887-fill-missing-data": "Pandas/Data_Manipulation",
     "2888-reshape-data-concatenate": "Pandas/Data_Manipulation",
 }
+TAG_TO_FOLDER_MAP = {
+    "Database": "Database/Joins",
+    "Pandas": "Pandas/Data_Manipulation",
+    "Hash Table": "Algorithm/Arrays_and_Hashing",
+    "Two Pointers": "Algorithm/Two_Pointers",
+    "Stack": "Algorithm/Stack",
+    "Binary Search": "Algorithm/Binary_Search",
+    "Sliding Window": "Algorithm/Sliding_Window",
+    "Linked List": "Algorithm/Linked_List",
+    "Dynamic Programming": "Algorithm/Dynamic_Programming",
+    "Tree": "Algorithm/Trees",
+    "Graph": "Algorithm/Graphs",
+    "Heap (Priority Queue)": "Algorithm/Heap",
+    "Backtracking": "Algorithm/Backtracking",
+    "Array": "Algorithm/Arrays_and_Hashing",
+}
+LEETCODE_GRAPHQL_URL = "https://leetcode.com/graphql"
 DEFAULT_CATEGORY = "Algorithm/Uncategorized"
 TASK_PATTERN = re.compile(r"^(\d+)-(.+)$")
 START = "<!-- START_TABLE -->"
@@ -36,6 +56,69 @@ CODE_EXTENSIONS = {
     ".h", ".hpp", ".cs", ".go", ".rs", ".rb", ".php", ".swift",
     ".kt", ".scala", ".dart", ".r", ".sh",
 }
+
+
+def get_problem_tags(title_slug):
+    """Return LeetCode topic tags in API order; return [] on API failure."""
+    query = """
+    query ProblemTags($titleSlug: String!) {
+        question(titleSlug: $titleSlug) {
+            topicTags { name }
+        }
+    }
+    """
+    try:
+        response = requests.post(
+            LEETCODE_GRAPHQL_URL,
+            json={
+                "query": query,
+                "operationName": "ProblemTags",
+                "variables": {"titleSlug": title_slug},
+            },
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "LeetCode-Notebook-Organizer/1.0",
+                "Referer": f"https://leetcode.com/problems/{quote(title_slug, safe='')}/",
+            },
+            timeout=(3.05, 10),
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get("errors"):
+            raise ValueError("Invalid response or GraphQL errors.")
+        question = payload["data"]["question"]
+        if question is None:
+            return []
+        tags = question["topicTags"]
+        if not isinstance(tags, list):
+            raise ValueError("topicTags is not a list.")
+        return [
+            tag["name"] for tag in tags
+            if isinstance(tag, dict) and isinstance(tag.get("name"), str)
+            and tag["name"].strip()
+        ]
+    except (requests.RequestException, ValueError, KeyError, TypeError) as error:
+        print(
+            f"Could not fetch tags for {title_slug}: {error} "
+            f"Using {DEFAULT_CATEGORY}.", file=sys.stderr,
+        )
+        return []
+
+
+@lru_cache(maxsize=None)
+def category_for_task(folder_name):
+    """Resolve each task once per process, including uncategorized results."""
+    match = TASK_PATTERN.fullmatch(folder_name)
+    if not match:
+        return DEFAULT_CATEGORY
+    title_slug = match.group(2)
+    key = f"{int(match.group(1))}-{title_slug}"
+    if key in KNOWN_TASKS_CACHE:
+        return KNOWN_TASKS_CACHE[key]
+    for tag in get_problem_tags(title_slug):
+        if tag in TAG_TO_FOLDER_MAP:
+            return TAG_TO_FOLDER_MAP[tag]
+    return DEFAULT_CATEGORY
 
 
 def git(*args, check=True):
@@ -277,9 +360,7 @@ def generate_table():
     # Pending submissions remain browsable before the organizer runs.
     if SOLUTIONS.is_dir():
         for task in discover_tasks():
-            match = TASK_PATTERN.fullmatch(task.name)
-            key = f"{int(match.group(1))}-{match.group(2)}"
-            category, pattern = CATEGORY_MAP.get(key, DEFAULT_CATEGORY).split("/")
+            category, pattern = category_for_task(task.name).split("/")
             groups.setdefault((category, pattern), {})[task.name] = task
 
     sections = []
@@ -347,9 +428,7 @@ def main():
                         "commit the solution to Git first."
                     )
                 origin = find_leetsync_commit(source)
-                match = TASK_PATTERN.fullmatch(source.name)
-                key = f"{int(match.group(1))}-{match.group(2)}"
-                target = ROOT / CATEGORY_MAP.get(key, DEFAULT_CATEGORY) / source.name
+                target = ROOT / category_for_task(source.name) / source.name
                 validate_move(source, target)
                 move_tree(source, target)
                 ensure_notes(target)

@@ -150,12 +150,17 @@ Pushes affecting `solutions/**` on the **test** branch trigger GitHub Actions.
 python3 scripts/organizer.py
 ```
 
+Install dependencies with `python3 -m pip install -r requirements.txt`.
 Configure Git's `user.name` and `user.email` first, and commit incoming
 solutions before running the organizer. The script creates local commits;
 it does not push them.
 
 - Problem folders follow `<category>/<pattern>/<id>-<slug>/`.
-- Unknown problems go to `Algorithm/Uncategorized`.
+- `KNOWN_TASKS_CACHE` provides manual category overrides without API requests.
+- Other problems use LeetCode GraphQL tags: the first tag matching
+  `TAG_TO_FOLDER_MAP` determines the category, in the order returned by the API.
+- Results are cached for the current process. API failures, missing tags, or
+  unmapped tags fall back to `Algorithm/Uncategorized` without stopping the run.
 - Existing notes are preserved; conflicting notes require a manual merge.
 - Unrelated staged changes are excluded from generated commits.
 - Errors are reported per problem. A failed run prevents the workflow from pushing.

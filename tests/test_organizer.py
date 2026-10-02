@@ -15,6 +15,7 @@ from scripts import organizer
 
 class OrganizerTests(unittest.TestCase):
     def setUp(self):
+        organizer.category_for_task.cache_clear()
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -113,6 +114,28 @@ class OrganizerTests(unittest.TestCase):
         self.assertTrue((self.root / "Algorithm/Two_Pointers/125-valid-palindrome/solution.py").exists())
         self.assertEqual(self.git("log", "-1", "--pretty=%B").strip(), "Update README")
 
+    def test_api_category_is_used_for_move_and_readme(self):
+        self.task("999-api-problem", "Time: 1 ms - LeetSync")
+        with patch.object(organizer.requests, "post") as post:
+            post.return_value.json.return_value = {
+                "data": {"question": {"topicTags": [
+                    {"name": "Unknown Tag"}, {"name": "Stack"},
+                ]}},
+            }
+            self.assertEqual(self.run_organizer(), 0)
+        post.assert_called_once()
+        self.assertEqual(post.call_args.kwargs["json"]["variables"], {"titleSlug": "api-problem"})
+        self.assertTrue((self.root / "Algorithm/Stack/999-api-problem/solution.py").is_file())
+        self.assertIn("./Algorithm/Stack/999-api-problem/solution.py", (self.root / "README.md").read_text())
+
+    def test_network_failure_still_organizes_and_commits(self):
+        self.task("999-offline-problem", "Time: 1 ms - LeetSync")
+        with patch.object(organizer.requests, "post", side_effect=organizer.requests.ConnectionError("offline")) as post:
+            self.assertEqual(self.run_organizer(), 0)
+        post.assert_called_once()
+        self.assertTrue((self.root / "Algorithm/Uncategorized/999-offline-problem/solution.py").is_file())
+        self.assertEqual(self.git("log", "-1", "--pretty=%B").strip(), "Update README")
+
     def test_restored_task_gets_original_leetsync_message_on_destination(self):
         message = "Time: 3 ms (53.54%) | Memory: 20.6 MB (19.09%) - LeetSync"
         self.task("1-two-sum", message)
@@ -146,6 +169,52 @@ class OrganizerTests(unittest.TestCase):
             json.loads((self.root / target / ".leetsync.json").read_text())["source_commit"],
             original,
         )
+
+
+class CategoryTests(unittest.TestCase):
+    def setUp(self):
+        organizer.category_for_task.cache_clear()
+        self.addCleanup(organizer.category_for_task.cache_clear)
+
+    def test_known_task_skips_network_including_zero_padded_id(self):
+        with patch.object(organizer.requests, "post") as post:
+            self.assertEqual(organizer.category_for_task("0001-two-sum"), "Algorithm/Arrays_and_Hashing")
+        post.assert_not_called()
+
+    def test_first_matching_tag_wins_and_result_is_cached(self):
+        with patch.object(organizer, "get_problem_tags", return_value=["Unknown", "Stack", "Hash Table"]) as fetch:
+            self.assertEqual(organizer.category_for_task("999-new-task"), "Algorithm/Stack")
+            self.assertEqual(organizer.category_for_task("999-new-task"), "Algorithm/Stack")
+        fetch.assert_called_once_with("new-task")
+
+    def test_empty_or_unmapped_tags_use_default(self):
+        for tags in ([], ["Unmapped"]):
+            organizer.category_for_task.cache_clear()
+            with patch.object(organizer, "get_problem_tags", return_value=tags):
+                self.assertEqual(organizer.category_for_task("999-new-task"), organizer.DEFAULT_CATEGORY)
+
+    def test_api_errors_and_malformed_responses_return_empty_list(self):
+        payloads = [
+            None, [], {}, {"errors": [{"message": "denied"}]},
+            {"data": None}, {"data": {"question": None}},
+            {"data": {"question": {"topicTags": None}}},
+            {"data": {"question": {"topicTags": [None, {}, {"name": 12}]}}},
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload), patch.object(organizer.requests, "post") as post:
+                post.return_value.json.return_value = payload
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(organizer.get_problem_tags("two-sum"), [])
+        for error in (organizer.requests.Timeout("timeout"), organizer.requests.HTTPError("429"), ValueError("invalid JSON")):
+            with self.subTest(error=error), patch.object(organizer.requests, "post") as post:
+                if isinstance(error, organizer.requests.Timeout):
+                    post.side_effect = error
+                elif isinstance(error, organizer.requests.HTTPError):
+                    post.return_value.raise_for_status.side_effect = error
+                else:
+                    post.return_value.json.side_effect = error
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(organizer.get_problem_tags("two-sum"), [])
 
 
 if __name__ == "__main__":
