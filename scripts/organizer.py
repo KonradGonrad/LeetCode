@@ -1,5 +1,7 @@
-"""Keep solutions flat, preserve LeetSync results, and publish recent notebooks."""
+"""Organize solutions by difficulty and publish results, tags, and activity."""
 
+import argparse
+import hashlib
 import html
 import json
 import os
@@ -9,6 +11,12 @@ import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import quote
+
+if __package__:
+    from . import activity, fetch_tags
+else:
+    import activity
+    import fetch_tags
 
 ROOT = Path(__file__).resolve().parents[1]
 SOLUTIONS = ROOT / "solutions"
@@ -125,6 +133,16 @@ def submission(task):
         revision = git("log", "-1", "--format=%H", "--diff-filter=AM", "--", *paths).stdout.strip()
     if not revision:
         return None
+    saved_revision = saved.get("source_commit")
+    if saved_revision and saved_revision != revision:
+        if not isinstance(saved_revision, str) or not re.fullmatch(r"[0-9a-f]{40,64}", saved_revision):
+            raise ValueError(f"Invalid saved source commit for {task.name}")
+        # A difficulty change may hide newer code commits under a former path.
+        ancestor = git("merge-base", "--is-ancestor", revision, saved_revision, check=False)
+        if ancestor.returncode == 0:
+            revision = saved_revision
+        elif ancestor.returncode != 1:
+            ancestor.check_returncode()
     if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40,64}", revision):
         raise ValueError(f"Invalid source commit for {task.name}")
     timestamp, message = git("show", "-s", "--format=%ct%x00%B", revision).stdout.split("\0", 1)
@@ -178,22 +196,59 @@ def ensure_notebook(task):
 
 
 def prepare_task(source, origin):
-    target = SOLUTIONS / source.name
+    level = difficulty(source)
+    target = SOLUTIONS / (level if level != "—" else "Unknown") / source.name
     check_path(target)
     if source != target:
         if target.exists():
-            raise ValueError(f"Destination already exists; merge manually: {target}")
+            previous = submission(target)
+            if previous and previous["submitted_at"] > origin["submitted_at"]:
+                raise ValueError(f"Destination contains a newer solution: {target}")
+            validate_merge(source, target)
         for path in source.rglob("*"):
             check_path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(source), str(target))
+        move_tree(source, target)
     ensure_notebook(target)
     metadata = target / ".leetsync.json"
     check_path(metadata)
-    content = json.dumps(origin, ensure_ascii=False, indent=2) + "\n"
+    data = origin.copy()
+    # Restore the folder's LeetSync message after a manual bulk migration commit.
+    last = git("log", "-1", "--format=%H%x00%B", "--", target.relative_to(ROOT).as_posix()).stdout
+    if last and last.split("\0", 1)[1].rstrip("\n") != origin["message"]:
+        data["organization_commit"] = last.split("\0", 1)[0]
+    elif metadata.exists():
+        previous = json.loads(metadata.read_text(encoding="utf-8"))
+        if previous.get("source_commit") == origin["source_commit"] and previous.get("organization_commit"):
+            data["organization_commit"] = previous["organization_commit"]
+    content = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
     if not metadata.exists() or metadata.read_text(encoding="utf-8") != content:
         metadata.write_text(content, encoding="utf-8")
     return target
+
+
+def validate_merge(source, target):
+    check_path(source)
+    check_path(target)
+    if not target.exists():
+        return
+    if source.is_dir() and target.is_dir():
+        for child in source.iterdir():
+            validate_merge(child, target / child.name)
+    elif source.is_file() and target.is_file():
+        if (source.suffix == ".ipynb" or source.name == "notes.md") and source.read_bytes() != target.read_bytes():
+            raise ValueError(f"Conflicting personal notes; merge manually: {source}, {target}")
+    else:
+        raise ValueError(f"File/directory conflict: {target}")
+
+
+def move_tree(source, target):
+    if source.is_dir() and target.exists():
+        for child in sorted(source.iterdir()):
+            move_tree(child, target / child.name)
+        source.rmdir()
+    else:
+        shutil.move(str(source), str(target))
 
 
 def remove_empty_legacy_directories():
@@ -225,15 +280,57 @@ def difficulty(task):
     return match.group(1).capitalize() if match else "—"
 
 
+def problem_title(task):
+    path = task / "README.md"
+    if path.is_file():
+        match = re.search(r"<h[12]\b[^>]*>(.*?)</h[12]>", path.read_text(encoding="utf-8"), re.S | re.I)
+        if match:
+            title = html.unescape(re.sub(r"<[^>]+>", "", match.group(1))).strip()
+            return re.sub(r"^\d+\.\s*", "", title)
+    return task.name.split("-", 1)[1].replace("-", " ").title()
+
+
+def performance(message):
+    message = re.sub(r"\s*- LeetSync\s*$", "", message)
+    values = []
+    for field in ("Time", "Memory"):
+        match = re.search(rf"\b{field}:\s*([^|\n]+)", message)
+        values.append(markdown_label(match.group(1).strip()) if match else "—")
+    return values
+
+
+def badge(label, color, kind="tag"):
+    if not re.fullmatch(r"[0-9a-fA-F]{6}", color):
+        raise ValueError(f"Invalid badge color: {color}")
+    name = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+    digest = hashlib.sha256(label.encode()).hexdigest()[:8]
+    path = ROOT / "assets/badges" / f"{kind}-{name}-{digest}.svg"
+    check_path(path)
+    width = max(44, len(label) * 7 + 18)
+    rgb = [int(color[n:n+2], 16) for n in (0, 2, 4)]
+    foreground = "#111827" if sum(c*w for c, w in zip(rgb, (.299, .587, .114))) > 150 else "#ffffff"
+    content = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="22" role="img" aria-label="{html.escape(label)}">'
+        f'<rect width="{width}" height="22" rx="5" fill="#{color}"/>'
+        f'<text x="{width/2}" y="15" text-anchor="middle" fill="{foreground}" '
+        f'font-family="DejaVu Sans Mono,monospace" font-size="11">{html.escape(label)}</text></svg>\n'
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists() or path.read_text() != content:
+        path.write_text(content, encoding="utf-8")
+    return f"![{markdown_label(label)}](./{path.relative_to(ROOT).as_posix()})"
+
+
 def generate_table():
     entries = []
+    cache = fetch_tags.load_cache(ROOT / "scripts/leetcode_cache.json")
+    colors = json.loads((ROOT / "scripts/tag_colors.json").read_text(encoding="utf-8"))
     order = {sha: index for index, sha in enumerate(git("rev-list", "HEAD").stdout.splitlines())}
-    if SOLUTIONS.is_dir():
-        for task in SOLUTIONS.iterdir():
-            if task.is_dir() and not task.is_symlink() and TASK_PATTERN.fullmatch(task.name):
-                info = submission(task)
-                if info:
-                    entries.append((task, info))
+    for task in discover_tasks():
+        if task.is_relative_to(SOLUTIONS):
+            info = submission(task)
+            if info:
+                entries.append((task, info))
     entries.sort(key=lambda item: (
         -item[1]["submitted_at"],
         order.get(item[1]["source_commit"], len(order)),
@@ -243,18 +340,27 @@ def generate_table():
         "<details>",
         "<summary><strong>Latest 10 solved problems</strong></summary>",
         "",
-        "| Problem | Code | Notes | Time | Difficulty |",
-        "| --- | --- | --- | --- | --- |",
+        "| ID | Problem | Time | Memory | Difficulty | Tags |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for task, info in entries[:10]:
-        code = "<br>".join(link(path, path.name) for path in code_files(task)) or "—"
+        icons = [link(path, "💻") for path in code_files(task)]
         notes = task / "notes.ipynb"
-        note_link = link(notes, "Notebook") if notes.is_file() and not notes.is_symlink() else "—"
-        message = info["message"]
-        result = re.sub(r" - LeetSync\s*$", "", message) if re.search(r"\bTime:", message) else ""
-        result = "<br>".join(markdown_label(line) for line in result.splitlines()) or "—"
+        if notes.is_file() and not notes.is_symlink():
+            icons.append(link(notes, "📝"))
+        runtime, memory = performance(info["message"])
+        level = difficulty(task)
+        level_badge = badge(level, colors["difficulty"][level], "difficulty") if level != "—" else "—"
+        identifier, slug = task.name.split("-", 1)
+        tags = cache.get(slug, {}).get("tags", [])
+        tag_badges = []
+        for tag in tags:
+            palette = colors["palette"]
+            fallback = palette[int(hashlib.sha256(tag.encode()).hexdigest()[:8], 16) % len(palette)]
+            tag_badges.append(badge(tag, colors["tags"].get(tag, fallback)))
         rows.append(
-            f"| {link(task, task.name)} | {code} | {note_link} | {result} | {difficulty(task)} |"
+            f"| {int(identifier)} | {link(task, problem_title(task))} {' '.join(icons)} "
+            f"| {runtime} | {memory} | {level_badge} | {' '.join(tag_badges) or '—'} |"
         )
     rows.extend(["", "</details>"])
     return "\n".join(rows)
@@ -275,7 +381,7 @@ def update_readme():
         README.write_text(updated, encoding="utf-8")
 
 
-def main():
+def main(*, commit=True, offline=False):
     errors = 0
     try:
         # Validate the marker pair before changing any solution files.
@@ -290,14 +396,25 @@ def main():
                 if not origin:
                     raise ValueError("Commit the solution to Git before running the organizer.")
                 target = prepare_task(source, origin)
-                commit_paths(origin["message"], source, target)
+                if commit:
+                    commit_paths(origin["message"], source, target)
                 print(f"Prepared: {target.relative_to(ROOT)}")
             except (OSError, ValueError, subprocess.SubprocessError, shutil.Error) as error:
                 errors += 1
                 report_error(f"Error processing {source.name}", error)
         remove_empty_legacy_directories()
+        cache_path = ROOT / "scripts/leetcode_cache.json"
+        check_path(cache_path)
+        if not offline:
+            fetch_tags.update_cache(discover_tasks(), cache_path)
+        counts = activity.daily_activity(git, CODE_EXTENSIONS)
+        activity.render_activity(counts, ROOT / "assets/activity.png")
         update_readme()
-        commit_paths("Update README", README)
+        if commit:
+            paths = [README, ROOT / "assets"]
+            if cache_path.exists():
+                paths.append(cache_path)
+            commit_paths("Update README", *paths)
     except (OSError, ValueError, subprocess.SubprocessError, shutil.Error) as error:
         errors += 1
         report_error("Organizer error", error)
@@ -305,4 +422,8 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--no-commit", action="store_true", help="Prepare files without creating Git commits")
+    parser.add_argument("--offline", action="store_true", help="Use cached tags without API calls")
+    args = parser.parse_args()
+    sys.exit(main(commit=not args.no_commit, offline=args.offline))
