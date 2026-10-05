@@ -55,12 +55,16 @@ def check_path(path):
 def commit_paths(message, *paths):
     relative = list(dict.fromkeys(path.relative_to(ROOT).as_posix() for path in paths))
     git("add", "-A", "--", *relative)
-    diff = git("diff", "--cached", "--quiet", "--", *relative, check=False)
+    
+    # Usunięto ścieżki z diff, aby sprawdzić cały stage
+    diff = git("diff", "--cached", "--quiet", check=False)
     if diff.returncode == 0:
         return False
     if diff.returncode != 1:
         diff.check_returncode()
-    result = git("commit", "--only", "--cleanup=verbatim", "-m", message, "--", *relative)
+        
+    # Usunięto flagę --only oraz ścieżki z polecenia commit
+    result = git("commit", "--cleanup=verbatim", "-m", message)
     print(result.stdout.strip())
     return True
 
