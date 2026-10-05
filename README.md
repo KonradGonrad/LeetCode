@@ -21,12 +21,13 @@
 
 ## Activity
 
-![Daily LeetCode activity](./assets/activity.png)
+![Daily LeetCode activity](./assets/heatmap.svg)
 
-Each bar counts distinct problems solved that day in **Europe/Warsaw** time.
-Multiple submissions of the same problem on one day count once; solving it
-again on another day counts on that day too. Organizer commits and notebook
-edits are excluded.
+Each square represents one of the **last 365 days in UTC**, arranged in seven
+weekday rows. Darker green means more solved problems. Counts use the stored
+solution timestamp for each problem in the full collection, not just the ten
+shown below. Each problem contributes its latest stored solution date;
+organizer commits and notebook edits do not add activity.
 
 ## Solutions
 
@@ -92,7 +93,6 @@ Every request is saved immediately, including errors and empty tag lists;
 cached entries are not requested again automatically.
 
 ```bash
-python3 -m pip install -r requirements.txt
 python3 scripts/organizer.py
 ```
 
@@ -104,8 +104,12 @@ can also be started manually from GitHub Actions.
 2. Create missing notebooks and preserve the original solution commit in
    `.leetsync.json`.
 3. Commit each changed problem using its original LeetSync message.
-4. Update the tag cache, Matplotlib activity chart, and latest-ten table in a
+4. Update the tag cache, SVG activity heatmap, and latest-ten table in a
    separate `Update README` commit.
+
+All automation uses only the Python standard library. No Matplotlib, pandas,
+or other third-party packages are required. The heatmap is generated directly
+as SVG in `assets/heatmap.svg`.
 
 Configure Git's `user.name` and `user.email` before running locally.
 Incoming solutions must already be committed. The script creates local commits;

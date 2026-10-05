@@ -321,10 +321,8 @@ def badge(label, color, kind="tag"):
     return f"![{markdown_label(label)}](./{path.relative_to(ROOT).as_posix()})"
 
 
-def generate_table():
+def collect_entries():
     entries = []
-    cache = fetch_tags.load_cache(ROOT / "scripts/leetcode_cache.json")
-    colors = json.loads((ROOT / "scripts/tag_colors.json").read_text(encoding="utf-8"))
     order = {sha: index for index, sha in enumerate(git("rev-list", "HEAD").stdout.splitlines())}
     for task in discover_tasks():
         if task.is_relative_to(SOLUTIONS):
@@ -336,6 +334,14 @@ def generate_table():
         order.get(item[1]["source_commit"], len(order)),
         item[0].name,
     ))
+    return entries
+
+
+def generate_table(entries=None):
+    if entries is None:
+        entries = collect_entries()
+    cache = fetch_tags.load_cache(ROOT / "scripts/leetcode_cache.json")
+    colors = json.loads((ROOT / "scripts/tag_colors.json").read_text(encoding="utf-8"))
     rows = [
         "<details>",
         "<summary><strong>Latest 10 solved problems</strong></summary>",
@@ -366,7 +372,7 @@ def generate_table():
     return "\n".join(rows)
 
 
-def update_readme():
+def update_readme(entries=None):
     check_path(README)
     original = README.read_text(encoding="utf-8")
     if (original.count(START) != 1 or original.count(END) != 1
@@ -374,7 +380,7 @@ def update_readme():
         raise ValueError("README.md must contain one ordered START_TABLE / END_TABLE pair.")
     updated = re.sub(
         re.escape(START) + r".*?" + re.escape(END),
-        lambda _: f"{START}\n\n{generate_table()}\n\n{END}",
+        lambda _: f"{START}\n\n{generate_table(entries)}\n\n{END}",
         original, flags=re.DOTALL,
     )
     if updated != original:
@@ -407,9 +413,11 @@ def main(*, commit=True, offline=False):
         check_path(cache_path)
         if not offline:
             fetch_tags.update_cache(discover_tasks(), cache_path)
-        counts = activity.daily_activity(git, CODE_EXTENSIONS)
-        activity.render_activity(counts, ROOT / "assets/activity.png")
-        update_readme()
+        entries = collect_entries()
+        heatmap = ROOT / "assets/heatmap.svg"
+        check_path(heatmap)
+        activity.write_heatmap(entries, heatmap)
+        update_readme(entries)
         if commit:
             paths = [README, ROOT / "assets"]
             if cache_path.exists():
