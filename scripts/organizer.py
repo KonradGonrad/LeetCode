@@ -338,17 +338,12 @@ def collect_entries():
 
 
 def generate_table(entries=None):
+    """Generate only problem rows; README owns the table header and layout."""
     if entries is None:
         entries = collect_entries()
     cache = fetch_tags.load_cache(ROOT / "scripts/leetcode_cache.json")
     colors = json.loads((ROOT / "scripts/tag_colors.json").read_text(encoding="utf-8"))
-    rows = [
-        "<details>",
-        "<summary><strong>Latest 10 solved problems</strong></summary>",
-        "",
-        "| ID | Problem | Time | Memory | Difficulty | Tags |",
-        "| --- | --- | --- | --- | --- | --- |",
-    ]
+    rows = []
     for task, info in entries[:10]:
         icons = [link(path, "💻") for path in code_files(task)]
         notes = task / "notes.ipynb"
@@ -368,19 +363,30 @@ def generate_table(entries=None):
             f"| {int(identifier)} | {link(task, problem_title(task))} {' '.join(icons)} "
             f"| {runtime} | {memory} | {level_badge} | {' '.join(tag_badges) or '—'} |"
         )
-    rows.extend(["", "</details>"])
     return "\n".join(rows)
+
+
+def table_template(text):
+    """Validate the editable README template before changing repository files."""
+    if (text.count(START) != 1 or text.count(END) != 1
+            or text.index(START) >= text.index(END)):
+        raise ValueError("README.md must contain one ordered START_TABLE / END_TABLE pair.")
+    section = text.split(START, 1)[1].split(END, 1)[0]
+    header = re.match(
+        r"\s*\|[^\n]+\|\n\|(?:[ \t]*:?-+:?[ \t]*\|){6}[ \t]*\n", section,
+    )
+    if not header:
+        raise ValueError("The README table markers must enclose a six-column Markdown header and its rows.")
+    return header.group()
 
 
 def update_readme(entries=None):
     check_path(README)
     original = README.read_text(encoding="utf-8")
-    if (original.count(START) != 1 or original.count(END) != 1
-            or original.index(START) >= original.index(END)):
-        raise ValueError("README.md must contain one ordered START_TABLE / END_TABLE pair.")
+    header = table_template(original)
     updated = re.sub(
         re.escape(START) + r".*?" + re.escape(END),
-        lambda _: f"{START}\n\n{generate_table(entries)}\n\n{END}",
+        lambda _: f"{START}{header}{generate_table(entries)}\n\n{END}",
         original, flags=re.DOTALL,
     )
     if updated != original:
@@ -393,9 +399,7 @@ def main(*, commit=True, offline=False):
         # Validate the marker pair before changing any solution files.
         check_path(README)
         text = README.read_text(encoding="utf-8")
-        if (text.count(START) != 1 or text.count(END) != 1
-                or text.index(START) >= text.index(END)):
-            raise ValueError("README.md must contain one ordered START_TABLE / END_TABLE pair.")
+        table_template(text)
         for source in discover_tasks():
             try:
                 origin = submission(source)
