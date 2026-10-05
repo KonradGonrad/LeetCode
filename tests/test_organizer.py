@@ -7,9 +7,10 @@ import os
 import subprocess
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
+from xml.etree import ElementTree
 
 from scripts import organizer
 
@@ -209,22 +210,23 @@ class OrganizerTests(unittest.TestCase):
         self.assertEqual(organizer.submission(target)["source_commit"], newest)
         self.assertIn("| 1 ms |", organizer.generate_table())
 
-    def test_activity_counts_unique_problem_days_and_ignores_organization(self):
+    def test_activity_uses_latest_submission_per_entry_and_ignores_organization(self):
         self.task("1-first", day=1)
         self.task("2-second", day=1)
         self.write("solutions/1-first/solution.py", "# resubmission")
         self.git("add", ".")
         with patch.dict(os.environ, {"GIT_COMMITTER_DATE": "2025-01-01T14:00:00+00:00"}):
             self.git("commit", "-qm", "Time: 2 ms - LeetSync")
-        self.write("solutions/1-first/solution.py", "# next local day")
+        self.write("solutions/1-first/solution.py", "# next UTC day")
         self.git("add", ".")
-        with patch.dict(os.environ, {"GIT_COMMITTER_DATE": "2025-01-01T23:30:00+00:00"}):
+        with patch.dict(os.environ, {"GIT_COMMITTER_DATE": "2025-01-02T00:30:00+00:00"}):
             self.git("commit", "-qm", "Time: 1 ms - LeetSync")
-        expected = {date(2025, 1, 1): 2, date(2025, 1, 2): 1}
-        self.assertEqual(organizer.activity.daily_activity(organizer.git, organizer.CODE_EXTENSIONS), expected)
+        expected = {date(2025, 1, 1): 1, date(2025, 1, 2): 1}
+        self.assertEqual(organizer.activity.daily_activity(organizer.collect_entries()), expected)
         self.assertEqual(self.run_organizer(), 0)
-        self.assertEqual(organizer.activity.daily_activity(organizer.git, organizer.CODE_EXTENSIONS), expected)
-        self.assertTrue((self.root / "assets/activity.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(organizer.activity.daily_activity(organizer.collect_entries()), expected)
+        self.assertEqual(ElementTree.parse(self.root / "assets/heatmap.svg").getroot().tag,
+                         "{http://www.w3.org/2000/svg}svg")
 
     def test_tag_badges_and_performance_columns(self):
         self.task()
@@ -240,6 +242,65 @@ class OrganizerTests(unittest.TestCase):
         self.assertEqual(organizer.performance("Time: 0 ms (100.00%) | Memory: 19.3 MB (32.95%) - LeetSync"),
                          ["0 ms (100.00%)", "19.3 MB (32.95%)"])
         self.assertEqual(organizer.performance("Not a result"), ["—", "—"])
+
+
+class HeatmapTests(unittest.TestCase):
+    def cells(self, svg):
+        return [node for node in ElementTree.fromstring(svg).iter()
+                if "data-date" in node.attrib]
+
+    def test_exact_365_days_seven_rows_and_leap_day(self):
+        today = date(2024, 3, 1)
+        cells = self.cells(organizer.activity.heatmap_svg([], today=today))
+        self.assertEqual(len(cells), 365)
+        self.assertEqual(cells[0].get("data-date"), str(today - timedelta(days=364)))
+        self.assertEqual(cells[-1].get("data-date"), str(today))
+        self.assertIn("2024-02-29", [cell.get("data-date") for cell in cells])
+        self.assertEqual(len({cell.get("y") for cell in cells}), 7)
+        self.assertEqual(len({cell.get("x") for cell in cells}), 53)
+        for cell in cells:
+            day = date.fromisoformat(cell.get("data-date"))
+            self.assertEqual(int(cell.get("y")), 48 + day.weekday() * 13)
+            self.assertEqual(cell.get("width"), "10")
+            self.assertEqual(cell.get("height"), "10")
+            self.assertEqual(cell.get("fill"), "#ebedf0")
+        self.assertEqual(int(cells[7].get("x")) - int(cells[0].get("x")), 13)
+
+    def test_palette_counts_and_window(self):
+        today = date(2025, 1, 10)
+        entries = []
+        expected = {}
+        for offset, (count, color) in enumerate([
+            (0, "#ebedf0"), (1, "#9be9a8"), (2, "#40c463"),
+            (3, "#40c463"), (4, "#30a14e"), (5, "#30a14e"),
+            (6, "#216e39"), (10, "#216e39"),
+        ]):
+            day = today - timedelta(days=offset)
+            stamp = datetime(day.year, day.month, day.day, tzinfo=timezone.utc).timestamp()
+            entries.extend((Path(str(i)), {"submitted_at": stamp}) for i in range(count))
+            expected[str(day)] = (str(count), color)
+        for day in (today + timedelta(days=1), today - timedelta(days=365)):
+            stamp = datetime(day.year, day.month, day.day, tzinfo=timezone.utc).timestamp()
+            entries.append((Path("outside"), {"submitted_at": stamp}))
+        svg = organizer.activity.heatmap_svg(entries, today=today)
+        self.assertIn("31 solved problems", svg)
+        for cell in self.cells(svg):
+            count, color = expected.get(cell.get("data-date"), ("0", "#ebedf0"))
+            self.assertEqual((cell.get("data-count"), cell.get("fill")), (count, color))
+
+    def test_timestamps_are_counted_in_utc(self):
+        stamp = datetime.fromisoformat("2025-01-02T00:05:00+02:00").timestamp()
+        self.assertEqual(organizer.activity.daily_activity([(None, {"submitted_at": stamp})]),
+                         {date(2025, 1, 1): 1})
+
+    def test_write_creates_parent_and_does_not_rewrite_identical_svg(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "assets/heatmap.svg"
+            content = organizer.activity.write_heatmap([], output, today=date(2025, 1, 1))
+            self.assertEqual(output.read_text(), content)
+            with patch.object(Path, "write_text") as write:
+                organizer.activity.write_heatmap([], output, today=date(2025, 1, 1))
+            write.assert_not_called()
 
 
 class TagCacheTests(unittest.TestCase):

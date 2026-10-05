@@ -1,83 +1,86 @@
-"""Count unique problems per local day from original LeetSync code commits."""
+"""Render a 365-day activity heatmap using only Python's standard library."""
 
-import re
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
+
+PALETTE = ("#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39")
 
 
-def daily_activity(git, code_extensions, timezone="Europe/Warsaw"):
-    log = git(
-        "-c", "core.quotepath=false", "log", "--reverse", "--no-merges",
-        "--format=%H%x00%ct%x00%s", "--name-only", "--no-renames",
-        "--diff-filter=AM", "--fixed-strings", "--grep=LeetSync", "--",
-        "solutions", "Algorithm", "Database", "Pandas",
-    ).stdout
-    events = set()
-    stamp, subject, paths = None, "", []
-
-    def record():
-        if stamp is None or not re.search(r"\bTime:", subject):
-            return
-        automated = set()
-        solved = set()
-        for name in paths:
-            path = Path(name)
-            problem = next((part for part in path.parts if re.fullmatch(r"\d+-.+", part)), None)
-            if problem is None:
-                continue
-            if path.name in {".leetsync.json", "notes.md", "notes.ipynb"}:
-                automated.add(problem)
-            if path.suffix.lower() in code_extensions:
-                solved.add(problem)
-        day = datetime.fromtimestamp(stamp, ZoneInfo(timezone)).date()
-        events.update((day, problem.split("-", 1)[1]) for problem in solved - automated)
-
-    for line in log.splitlines():
-        if "\0" in line:
-            record()
-            _, timestamp, subject = line.split("\0", 2)
-            stamp, paths = int(timestamp), []
-        elif line:
-            paths.append(line)
-    record()
-    return dict(sorted(Counter(day for day, _ in events).items()))
+def daily_activity(entries):
+    """Count each problem at its stored submission date in UTC."""
+    return Counter(
+        datetime.fromtimestamp(info["submitted_at"], timezone.utc).date()
+        for _, info in entries
+    )
 
 
-def render_activity(counts, output, timezone="Europe/Warsaw"):
-    import matplotlib
-    matplotlib.use("Agg")
-    from matplotlib import dates, pyplot as plt, ticker
+def activity_color(count):
+    if count == 0:
+        return PALETTE[0]
+    if count == 1:
+        return PALETTE[1]
+    if count <= 3:
+        return PALETTE[2]
+    if count <= 5:
+        return PALETTE[3]
+    return PALETTE[4]
 
-    today = datetime.now(ZoneInfo(timezone)).date()
-    end = max(today, max(counts)) if counts else today
-    start = min(counts) if counts else end - timedelta(days=29)
-    days = [start + timedelta(days=n) for n in range((end - start).days + 1)]
-    values = [counts.get(day, 0) for day in days]
-    with plt.rc_context({"font.family": "DejaVu Sans", "font.size": 10}):
-        fig, ax = plt.subplots(figsize=(12, 3.8), dpi=160)
-        fig.set_facecolor("#0d1117")
-        ax.set_facecolor("#0d1117")
-        ax.bar(days, values, width=0.78, color="#3fb950", zorder=3)
-        ax.set_title("Daily problem-solving activity", loc="left", color="#f0f6fc", pad=30, fontsize=16, weight="bold")
-        ax.text(0, 1.04, f"{sum(values)} problem-days  ·  {len(counts)} active days  ·  {timezone}",
-                transform=ax.transAxes, color="#8b949e", fontsize=10)
-        ax.set_ylabel("Problems solved", color="#8b949e", labelpad=12)
-        ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
-        locator = dates.AutoDateLocator(minticks=3, maxticks=8)
-        ax.xaxis.set_major_locator(locator)
-        ax.xaxis.set_major_formatter(dates.ConciseDateFormatter(locator))
-        ax.tick_params(colors="#8b949e", length=0, pad=8)
-        ax.xaxis.get_offset_text().set_color("#8b949e")
-        ax.set_ylim(0, max(max(values, default=0) + 1, 2))
-        ax.grid(axis="y", color="#21262d", zorder=0)
-        for spine in ax.spines.values():
-            spine.set_visible(False)
-        if not counts:
-            ax.text(.5, .5, "No LeetSync activity yet", transform=ax.transAxes,
-                    ha="center", color="#8b949e")
-        fig.tight_layout(pad=2)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(output, facecolor=fig.get_facecolor(), metadata={"Software": "LeetCode Notebook"})
-        plt.close(fig)
+
+def heatmap_svg(entries, *, today=None):
+    """Return SVG for exactly 365 dates, aligned to Monday–Sunday rows."""
+    today = today if today is not None else datetime.now(timezone.utc).date()
+    start = today - timedelta(days=364)
+    grid_start = start - timedelta(days=start.weekday())
+    counts = daily_activity(entries)
+    size, gap = 10, 3
+    step = size + gap
+    left, top = 36, 48
+    columns = (today - grid_start).days // 7 + 1
+    width, height = left + columns * step + 16, 174
+    total = sum(count for day, count in counts.items() if start <= day <= today)
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" role="img" aria-labelledby="title description">',
+        '<title id="title">LeetCode activity — last 365 days</title>',
+        f'<desc id="description">{total} solved problems from {start} to {today}, in UTC. '
+        'Columns are weeks and rows are Monday through Sunday.</desc>',
+        '<g font-family="Arial, sans-serif" font-size="10" fill="#57606a">',
+        f'<text x="{left}" y="14">{total} solved problems in the last 365 days · UTC</text>',
+    ]
+    for row, label in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")):
+        parts.append(f'<text x="2" y="{top + row * step + 9}">{label}</text>')
+    months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    for index in range(365):
+        day = start + timedelta(days=index)
+        column = (day - grid_start).days // 7
+        x, y = left + column * step, top + day.weekday() * step
+        if day.day == 1:
+            parts.append(f'<text x="{x}" y="{top - 9}">{months[day.month - 1]}</text>')
+        count = counts[day]
+        noun = "problem" if count == 1 else "problems"
+        parts.append(
+            f'<rect x="{x}" y="{y}" width="{size}" height="{size}" rx="2" '
+            f'fill="{activity_color(count)}" data-date="{day}" data-count="{count}">'
+            f'<title>{day}: {count} {noun} solved</title></rect>'
+        )
+    legend_x, legend_y = width - 146, 151
+    parts.append(f'<text x="{legend_x - 28}" y="{legend_y + 9}">Less</text>')
+    for index, color in enumerate(PALETTE):
+        parts.append(
+            f'<rect x="{legend_x + index * step}" y="{legend_y}" '
+            f'width="{size}" height="{size}" rx="2" fill="{color}"/>'
+        )
+    parts.append(f'<text x="{legend_x + 5 * step + 4}" y="{legend_y + 9}">More</text>')
+    parts.extend(["</g>", "</svg>"])
+    return "\n".join(parts) + "\n"
+
+
+def write_heatmap(entries, output=Path("assets/heatmap.svg"), *, today=None):
+    output = Path(output)
+    content = heatmap_svg(entries, today=today)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if not output.exists() or output.read_text(encoding="utf-8") != content:
+        output.write_text(content, encoding="utf-8")
+    return content
