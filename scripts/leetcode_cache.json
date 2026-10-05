@@ -33,6 +33,17 @@
             "Sorting"
         ]
     },
+    "design-hashmap": {
+        "fetched_at": "2026-10-05T15:45:58.427473+00:00",
+        "status": "ok",
+        "tags": [
+            "Array",
+            "Hash Table",
+            "Linked List",
+            "Design",
+            "Hash Function"
+        ]
+    },
     "design-hashset": {
         "fetched_at": "2026-10-05T12:51:52.916206+00:00",
         "status": "ok",
