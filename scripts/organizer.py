@@ -1,5 +1,4 @@
-# scripts/organizer.py
-"""Organize LeetSync solutions and refresh the generated README table."""
+"""Keep solutions flat, preserve LeetSync results, and publish recent notebooks."""
 
 import html
 import json
@@ -8,147 +7,20 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from urllib.parse import quote
-
-import requests
 
 ROOT = Path(__file__).resolve().parents[1]
 SOLUTIONS = ROOT / "solutions"
 README = ROOT / "README.md"
-# Insertion order defines priority, independent of the API's tag order.
-BROAD_CATEGORIES = {
-    "Database": ["Database"],
-    "Pandas": ["Pandas"],
-    "Algorithm/Dynamic_Programming": ["Dynamic Programming", "Memoization"],
-    "Algorithm/Graphs": ["Graph", "Breadth-First Search", "Depth-First Search", "Union Find"],
-    "Algorithm/Trees": ["Tree", "Binary Tree", "Binary Search Tree", "Trie"],
-    "Algorithm/Backtracking": ["Backtracking"],
-    "Algorithm/Heap_Priority_Queue": ["Heap (Priority Queue)"],
-    "Algorithm/Binary_Search": ["Binary Search"],
-    "Algorithm/Stack_and_Queue": ["Stack", "Queue", "Monotonic Stack"],
-    "Algorithm/Linked_List": ["Linked List", "Doubly-Linked List"],
-    "Algorithm/Sliding_Window": ["Sliding Window"],
-    "Algorithm/Two_Pointers": ["Two Pointers"],
-    "Algorithm/Arrays_and_Hashing": ["Array", "String", "Hash Table", "Sorting", "Math"],
-}
-LEETCODE_GRAPHQL_URL = "https://leetcode.com/graphql"
-DEFAULT_CATEGORY = "Algorithm/Uncategorized"
-TASK_PATTERN = re.compile(r"^(\d+)-(.+)$")
 START = "<!-- START_TABLE -->"
 END = "<!-- END_TABLE -->"
-TABLE_PATTERN = re.escape(START) + r".*?" + re.escape(END)
+TASK_PATTERN = re.compile(r"^\d+-.+$")
 CODE_EXTENSIONS = {
-    ".py", ".sql", ".java", ".js", ".ts", ".cpp", ".cc", ".c",
-    ".h", ".hpp", ".cs", ".go", ".rs", ".rb", ".php", ".swift",
-    ".kt", ".scala", ".dart", ".r", ".sh",
+    ".py", ".sql", ".java", ".js", ".ts", ".cpp", ".cc", ".c", ".h",
+    ".hpp", ".cs", ".go", ".rs", ".rb", ".php", ".swift", ".kt",
+    ".scala", ".dart", ".r", ".sh",
 }
-
-
-def get_problem_tags(title_slug):
-    """Return LeetCode topic tags in API order; return [] on API failure."""
-    query = """
-    query ProblemTags($titleSlug: String!) {
-        question(titleSlug: $titleSlug) {
-            topicTags { name }
-        }
-    }
-    """
-    try:
-        response = requests.post(
-            LEETCODE_GRAPHQL_URL,
-            json={
-                "query": query,
-                "operationName": "ProblemTags",
-                "variables": {"titleSlug": title_slug},
-            },
-            headers={
-                "Accept": "application/json",
-                "User-Agent": "LeetCode-Notebook-Organizer/1.0",
-                "Referer": f"https://leetcode.com/problems/{quote(title_slug, safe='')}/",
-            },
-            timeout=(3.05, 10),
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict) or payload.get("errors"):
-            raise ValueError("Invalid response or GraphQL errors.")
-        question = payload["data"]["question"]
-        if question is None:
-            return []
-        tags = question["topicTags"]
-        if not isinstance(tags, list):
-            raise ValueError("topicTags is not a list.")
-        return [
-            tag["name"] for tag in tags
-            if isinstance(tag, dict) and isinstance(tag.get("name"), str)
-            and tag["name"].strip()
-        ]
-    except (requests.RequestException, ValueError, KeyError, TypeError) as error:
-        print(
-            f"Could not fetch tags for {title_slug}: {error} "
-            f"Using {DEFAULT_CATEGORY}.", file=sys.stderr,
-        )
-        return []
-
-
-def load_category_cache():
-    """Reject corrupt data rather than overwrite an existing cache silently."""
-    path = ROOT / "scripts/leetcode_tags.json"
-    check_path(path)
-    if not path.exists():
-        return {}
-    cache = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(cache, dict):
-        raise ValueError("The LeetCode category cache must be a JSON object.")
-    for slug, category in cache.items():
-        if (not isinstance(slug, str) or not slug
-                or not isinstance(category, str)
-                or not re.fullmatch(r"[A-Za-z0-9_]+(?:/[A-Za-z0-9_]+)?", category)):
-            raise ValueError(f"Invalid category cache entry for {slug!r}.")
-    return cache
-
-
-def save_category_cache(cache, original):
-    """Atomically save learned categories, only when their contents changed."""
-    if cache == original:
-        return False
-    path = ROOT / "scripts/leetcode_tags.json"
-    check_path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=path.parent,
-            prefix=".leetcode_tags-", suffix=".tmp", delete=False,
-        ) as handle:
-            temporary = Path(handle.name)
-            json.dump(cache, handle, ensure_ascii=False, indent=4)
-            handle.write("\n")
-        os.replace(temporary, path)
-    finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
-    return True
-
-
-def category_for_task(folder_name, cache):
-    """Use the slug cache first, then match broad categories by priority."""
-    match = TASK_PATTERN.fullmatch(folder_name)
-    if not match:
-        return DEFAULT_CATEGORY
-    title_slug = match.group(2)
-    if title_slug in cache:
-        return cache[title_slug]
-    tags = set(get_problem_tags(title_slug))
-    category = next(
-        (folder for folder, matching_tags in BROAD_CATEGORIES.items()
-         if tags.intersection(matching_tags)),
-        DEFAULT_CATEGORY,
-    )
-    cache[title_slug] = category
-    return category
 
 
 def git(*args, check=True):
@@ -159,74 +31,9 @@ def git(*args, check=True):
     )
 
 
-def commit_paths(message, *paths):
-    """Commit only these paths, leaving unrelated staged changes alone."""
-    relative = [path.relative_to(ROOT).as_posix() for path in paths]
-    git("add", "-A", "--", *relative)
-    diff = git("diff", "--cached", "--quiet", "--", *relative, check=False)
-    if diff.returncode == 0:
-        print("No changes to commit.")
-        return False
-    if diff.returncode != 1:
-        diff.check_returncode()
-    # --only also excludes changes staged by an earlier failed task.
-    result = git(
-        "commit", "--only", "--cleanup=verbatim", "-m", message,
-        "--", *relative,
-    )
-    print(result.stdout.strip())
-    return True
-
-
 def report_error(context, error):
-    if isinstance(error, subprocess.CalledProcessError):
-        detail = (error.stderr or error.stdout or str(error)).strip()
-    else:
-        detail = str(error)
-    print(f"{context}: {detail}", file=sys.stderr)
-
-
-def find_leetsync_commit(source):
-    """Skip later restore/organizer commits when locating submission metadata."""
-    revision = git(
-        "log", "-1", "--format=%H", "--fixed-strings", "--grep=LeetSync",
-        "--diff-filter=AM", "--", source.relative_to(ROOT).as_posix(),
-    ).stdout.strip()
-    if not revision:
-        print(f"No LeetSync commit found for {source.name}; keeping the regular commit.")
-        return None
-    message = git("show", "-s", "--format=%B", revision).stdout.rstrip("\n")
-    return revision, message
-
-
-def commit_leetsync_origin(target, origin):
-    """A real file change makes the extra commit visible in folder history."""
-    revision, message = origin
-    metadata = target / ".leetsync.json"
-    check_path(metadata)
-    data = {
-        "source_commit": revision,
-        "message": message,
-        # Also changes when an identical solution is moved again.
-        "organization_commit": git("rev-parse", "HEAD").stdout.strip(),
-    }
-    metadata.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    commit_paths(message, metadata)
-
-
-def walk_error(error):
-    raise error
-
-
-def directories(path):
-    return sorted(
-        (child for child in path.iterdir()
-         if child.is_dir() and not child.is_symlink()
-         and not child.name.startswith(".")),
-        key=lambda child: child.name.casefold(),
-    )
+    detail = (error.stderr or error.stdout) if isinstance(error, subprocess.CalledProcessError) else str(error)
+    print(f"{context}: {detail or error}", file=sys.stderr)
 
 
 def check_path(path):
@@ -237,88 +44,166 @@ def check_path(path):
             raise ValueError(f"Symbolic links are not allowed: {current}")
 
 
+def commit_paths(message, *paths):
+    relative = list(dict.fromkeys(path.relative_to(ROOT).as_posix() for path in paths))
+    git("add", "-A", "--", *relative)
+    diff = git("diff", "--cached", "--quiet", "--", *relative, check=False)
+    if diff.returncode == 0:
+        return False
+    if diff.returncode != 1:
+        diff.check_returncode()
+    result = git("commit", "--only", "--cleanup=verbatim", "-m", message, "--", *relative)
+    print(result.stdout.strip())
+    return True
+
+
+def walk_error(error):
+    raise error
+
+
 def discover_tasks():
+    # Former category roots are supported only for migration into solutions/.
     tasks = []
-    for base, dirs, _ in os.walk(SOLUTIONS, onerror=walk_error):
-        remaining = []
-        for name in sorted(dirs):
-            path = Path(base) / name
-            check_path(path)
-            if TASK_PATTERN.fullmatch(name):
-                tasks.append(path)
-            else:
-                remaining.append(name)
-        dirs[:] = remaining
+    for name in ("solutions", "Algorithm", "Database", "Pandas"):
+        root = ROOT / name
+        check_path(root)
+        if not root.exists():
+            continue
+        if not root.is_dir():
+            raise ValueError(f"Expected a directory: {root}")
+        for base, dirs, _ in os.walk(root, onerror=walk_error):
+            remaining = []
+            for name in sorted(dirs):
+                path = Path(base) / name
+                check_path(path)
+                if TASK_PATTERN.fullmatch(name):
+                    tasks.append(path)
+                elif not name.startswith("."):
+                    remaining.append(name)
+            dirs[:] = remaining
     return tasks
 
 
-def validate_move(source, target):
-    """Detect conflicts before moving any part of this task."""
-    check_path(source)
-    check_path(target)
-    if source.is_dir():
-        if target.exists() and not target.is_dir():
-            raise ValueError(f"Directory/file conflict: {target}")
-        for child in source.iterdir():
-            validate_move(child, target / child.name)
-    else:
-        if not source.is_file():
-            raise ValueError(f"Unsupported file: {source}")
-        if target.exists() and not target.is_file():
-            raise ValueError(f"File/directory conflict: {target}")
-        if source.name == "notes.md" and target.exists():
-            raise ValueError(
-                f"Both locations contain notes.md: {source}, {target}. "
-                "Merge the notes manually."
-            )
+def code_files(task):
+    return sorted(
+        path for path in task.rglob("*")
+        if path.is_file() and not path.is_symlink()
+        and not any(part.startswith(".") for part in path.relative_to(task).parts)
+        and path.suffix.lower() in CODE_EXTENSIONS
+    )
 
 
-def move_tree(source, target):
-    if not target.exists():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(source), str(target))
-    elif source.is_dir():
-        for child in sorted(source.iterdir()):
-            move_tree(child, target / child.name)
-        source.rmdir()
-    else:
-        # Replace code from a previous submission; Git keeps its history.
-        shutil.move(str(source), str(target))
+def submission(task):
+    """Read solution history, excluding notebook and metadata-only commits."""
+    metadata = task / ".leetsync.json"
+    check_path(metadata)
+    saved = json.loads(metadata.read_text(encoding="utf-8")) if metadata.exists() else {}
+    if not isinstance(saved, dict):
+        raise ValueError(f"Invalid submission metadata: {metadata}")
+    paths = []
+    for path in code_files(task):
+        paths.extend([
+            path.relative_to(ROOT).as_posix(),
+            (Path("solutions") / task.name / path.relative_to(task)).as_posix(),
+        ])
+    if not paths:
+        return None
+    revision = git(
+        "log", "-1", "--format=%H", "--fixed-strings", "--grep=LeetSync",
+        "--diff-filter=AM", "--", *paths,
+    ).stdout.strip()
+    metadata_commit = git(
+        "log", "-1", "--format=%H", "--", metadata.relative_to(ROOT).as_posix()
+    ).stdout.strip() if saved else ""
+    # A migration commit can touch both code and metadata. Retain its source date.
+    if saved.get("source_commit") and (
+        not revision or revision == metadata_commit
+        or revision == saved.get("organization_commit")
+    ):
+        revision = saved["source_commit"]
+    if not revision:
+        revision = git("log", "-1", "--format=%H", "--diff-filter=AM", "--", *paths).stdout.strip()
+    if not revision:
+        return None
+    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40,64}", revision):
+        raise ValueError(f"Invalid source commit for {task.name}")
+    timestamp, message = git("show", "-s", "--format=%ct%x00%B", revision).stdout.split("\0", 1)
+    return {
+        "source_commit": revision,
+        "message": message.rstrip("\n"),
+        "submitted_at": int(timestamp),
+    }
 
 
-def ensure_notes(task):
-    notes = task / "notes.md"
+def notebook_data(task):
+    legacy = task / "notes.md"
+    check_path(legacy)
+    slug = task.name.split("-", 1)[1]
+    text = legacy.read_text(encoding="utf-8") if legacy.exists() else (
+        f"# {task.name}\n\n"
+        f"[Problem on LeetCode](https://leetcode.com/problems/{slug}/)\n\n"
+        "## Approach\n\nWrite your reasoning here.\n\n"
+        "## Complexity\n\n- Time: \n- Space: \n"
+    )
+    return {
+        "cells": [
+            {"cell_type": "markdown", "metadata": {}, "source": text.splitlines(keepends=True)},
+            {"cell_type": "code", "execution_count": None, "metadata": {},
+             "outputs": [], "source": []},
+        ],
+        "metadata": {
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python"},
+        },
+        "nbformat": 4,
+        "nbformat_minor": 4,
+    }
+
+
+def ensure_notebook(task):
+    notes = task / "notes.ipynb"
     check_path(notes)
     if notes.exists():
         if not notes.is_file():
-            raise ValueError(f"notes.md is not a file: {notes}")
+            raise ValueError(f"Notebook is not a file: {notes}")
         return
-    name = task.name
-    template = (
-        f"# {name}\n"
-        "- **Link:** \n"
-        "- **Time Complexity:** O()\n"
-        "- **Space Complexity:** O()\n"
-        "- **Intuition:** \n\n"
-        "## Anki Flashcard\n"
-        f"**Front:** How can you solve {name} optimally?\n"
-        "**Back:** \n"
-    )
+    data = notebook_data(task)
     with notes.open("x", encoding="utf-8") as handle:
-        handle.write(template)
+        json.dump(data, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    # Content has been preserved verbatim in the notebook's Markdown cell.
+    legacy = task / "notes.md"
+    if legacy.exists():
+        legacy.unlink()
 
 
-def remove_empty_directories():
-    # Never recursively delete unrecognized files.
-    for base, _, _ in os.walk(SOLUTIONS, topdown=False, onerror=walk_error):
-        path = Path(base)
-        if not path.is_symlink() and not any(path.iterdir()):
-            path.rmdir()
-    if SOLUTIONS.exists():
-        raise ValueError(
-            "Unrecognized files or symbolic links remain in solutions/. "
-            "They have been preserved; check their structure."
-        )
+def prepare_task(source, origin):
+    target = SOLUTIONS / source.name
+    check_path(target)
+    if source != target:
+        if target.exists():
+            raise ValueError(f"Destination already exists; merge manually: {target}")
+        for path in source.rglob("*"):
+            check_path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(target))
+    ensure_notebook(target)
+    metadata = target / ".leetsync.json"
+    check_path(metadata)
+    content = json.dumps(origin, ensure_ascii=False, indent=2) + "\n"
+    if not metadata.exists() or metadata.read_text(encoding="utf-8") != content:
+        metadata.write_text(content, encoding="utf-8")
+    return target
+
+
+def remove_empty_legacy_directories():
+    for name in ("Algorithm", "Database", "Pandas"):
+        root = ROOT / name
+        if root.is_dir():
+            for base, _, _ in os.walk(root, topdown=False, onerror=walk_error):
+                path = Path(base)
+                if not path.is_symlink() and not any(path.iterdir()):
+                    path.rmdir()
 
 
 def markdown_label(value):
@@ -327,180 +212,96 @@ def markdown_label(value):
 
 
 def link(path, label):
-    relative = path.relative_to(ROOT).as_posix()
-    return f"[{markdown_label(label)}](./{quote(relative, safe='/')})"
+    return f"[{markdown_label(label)}](./{quote(path.relative_to(ROOT).as_posix(), safe='/')})"
 
 
-def task_sort_key(task):
-    return int(TASK_PATTERN.fullmatch(task.name).group(1)), task.name
+def difficulty(task):
+    path = task / "README.md"
+    check_path(path)
+    if not path.is_file():
+        return "—"
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"Difficulty\s*[:\-]\s*(Easy|Medium|Hard)\b", text, re.IGNORECASE)
+    return match.group(1).capitalize() if match else "—"
 
 
-def code_links(task):
-    files = []
-    for base, dirs, names in os.walk(task, onerror=walk_error):
-        dirs[:] = sorted(
-            name for name in dirs
-            if not name.startswith(".")
-            and not (Path(base) / name).is_symlink()
-        )
-        for name in sorted(names):
-            path = Path(base) / name
-            if (not path.is_symlink() and path.is_file()
-                    and path.suffix.lower() in CODE_EXTENSIONS):
-                files.append(path)
-    return "<br>".join(
-        link(path, path.relative_to(task).as_posix()) for path in sorted(files)
-    ) or "—"
-
-
-def submission_result(task):
-    """Prefer recorded LeetSync metadata, falling back to path history."""
-    message = ""
-    metadata = task / ".leetsync.json"
-    if metadata.is_file() and not metadata.is_symlink():
-        try:
-            data = json.loads(metadata.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and isinstance(data.get("message"), str):
-                message = data["message"]
-        except (OSError, UnicodeError, ValueError) as error:
-            report_error(f"Could not read submission metadata for {task.name}", error)
-    if not message.strip():
-        try:
-            message = git(
-                "log", "-1", "--format=%B", "--fixed-strings",
-                "--grep=LeetSync", "--diff-filter=AM", "--",
-                task.relative_to(ROOT).as_posix(), f"solutions/{task.name}",
-            ).stdout
-        except (OSError, UnicodeError, subprocess.SubprocessError) as error:
-            report_error(f"Could not read submission history for {task.name}", error)
-    message = re.sub(r" - LeetSync\s*$", "", message.strip())
-    return "<br>".join(markdown_label(line) for line in message.splitlines()) or "—"
-
-
-def generate_table(cache=None):
-    if cache is None:
-        cache = load_category_cache()
-    groups = {}
-    for category in directories(ROOT):
-        if category.name in {"solutions", "scripts"}:
-            continue
-        for pattern in directories(category):
-            if TASK_PATTERN.fullmatch(pattern.name):
-                groups.setdefault((category.name, ""), {})[pattern.name] = pattern
-                continue
-            for task in directories(pattern):
-                if TASK_PATTERN.fullmatch(task.name):
-                    groups.setdefault((category.name, pattern.name), {})[task.name] = task
-
-    # Pending submissions remain browsable before the organizer runs.
+def generate_table():
+    entries = []
+    order = {sha: index for index, sha in enumerate(git("rev-list", "HEAD").stdout.splitlines())}
     if SOLUTIONS.is_dir():
-        for task in discover_tasks():
-            category, _, pattern = category_for_task(task.name, cache).partition("/")
-            groups.setdefault((category, pattern), {})[task.name] = task
+        for task in SOLUTIONS.iterdir():
+            if task.is_dir() and not task.is_symlink() and TASK_PATTERN.fullmatch(task.name):
+                info = submission(task)
+                if info:
+                    entries.append((task, info))
+    entries.sort(key=lambda item: (
+        -item[1]["submitted_at"],
+        order.get(item[1]["source_commit"], len(order)),
+        item[0].name,
+    ))
+    rows = [
+        "<details>",
+        "<summary><strong>Latest 10 solved problems</strong></summary>",
+        "",
+        "| Problem | Code | Notes | Time | Difficulty |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for task, info in entries[:10]:
+        code = "<br>".join(link(path, path.name) for path in code_files(task)) or "—"
+        notes = task / "notes.ipynb"
+        note_link = link(notes, "Notebook") if notes.is_file() and not notes.is_symlink() else "—"
+        message = info["message"]
+        result = re.sub(r" - LeetSync\s*$", "", message) if re.search(r"\bTime:", message) else ""
+        result = "<br>".join(markdown_label(line) for line in result.splitlines()) or "—"
+        rows.append(
+            f"| {link(task, task.name)} | {code} | {note_link} | {result} | {difficulty(task)} |"
+        )
+    rows.extend(["", "</details>"])
+    return "\n".join(rows)
 
-    sections = []
-    for category in sorted({category for category, _ in groups}, key=str.casefold):
-        patterns = []
-        total = 0
-        for (main_category, pattern), entries in sorted(groups.items()):
-            if main_category != category:
-                continue
-            tasks = sorted(entries.values(), key=task_sort_key)
-            total += len(tasks)
-            heading = html.escape(pattern.replace("_", " "))
-            label = "problem" if len(tasks) == 1 else "problems"
-            rows = ([
-                f"<details><summary><b>{heading}</b> · {len(tasks)} {label}</summary>", "",
-            ] if pattern else []) + [
-                "| Problem | Code | Notes | Time |", "| --- | --- | --- | --- |",
-            ]
-            for task in tasks:
-                notes = task / "notes.md"
-                notes_link = link(notes, "Notes") if notes.is_file() else "—"
-                rows.append(
-                    f"| {markdown_label(task.name)} | {code_links(task)} "
-                    f"| {notes_link} | {submission_result(task)} |"
-                )
-            if pattern:
-                rows.extend(["", "</details>"])
-            patterns.append("\n".join(rows))
-        if patterns:
-            label = "problem" if total == 1 else "problems"
-            sections.append(
-                f"<details>\n<summary><strong>{html.escape(category)}</strong>"
-                f" · {total} {label}</summary>\n\n"
-                + "\n\n".join(patterns)
-                + "\n\n</details>"
-            )
-    return "\n\n".join(sections) or "_No solved problems yet._"
+
+def update_readme():
+    check_path(README)
+    original = README.read_text(encoding="utf-8")
+    if (original.count(START) != 1 or original.count(END) != 1
+            or original.index(START) >= original.index(END)):
+        raise ValueError("README.md must contain one ordered START_TABLE / END_TABLE pair.")
+    updated = re.sub(
+        re.escape(START) + r".*?" + re.escape(END),
+        lambda _: f"{START}\n\n{generate_table()}\n\n{END}",
+        original, flags=re.DOTALL,
+    )
+    if updated != original:
+        README.write_text(updated, encoding="utf-8")
 
 
 def main():
+    errors = 0
     try:
-        cache = load_category_cache()
-        original_cache = cache.copy()
-        check_path(SOLUTIONS)
-        if not SOLUTIONS.exists():
-            print("No solutions/ directory found — nothing to organize.")
-            return 0
-        if not SOLUTIONS.is_dir():
-            raise ValueError("solutions exists but is not a directory.")
+        # Validate the marker pair before changing any solution files.
         check_path(README)
-        original = README.read_text(encoding="utf-8")
-        if (original.count(START) != 1 or original.count(END) != 1
-                or original.index(START) >= original.index(END)):
-            raise ValueError(
-                "README.md must contain exactly one correctly ordered "
-                "pair of START_TABLE / END_TABLE markers."
-            )
-        tasks = discover_tasks()
-        errors = completed = 0
-        for source in tasks:
+        text = README.read_text(encoding="utf-8")
+        if (text.count(START) != 1 or text.count(END) != 1
+                or text.index(START) >= text.index(END)):
+            raise ValueError("README.md must contain one ordered START_TABLE / END_TABLE pair.")
+        for source in discover_tasks():
             try:
-                message = git(
-                    "log", "-1", "--pretty=%B", "--",
-                    source.relative_to(ROOT).as_posix(),
-                ).stdout.rstrip("\n")
-                if not message.strip():
-                    raise ValueError(
-                        "No commit message found in the problem's history; "
-                        "commit the solution to Git first."
-                    )
-                origin = find_leetsync_commit(source)
-                target = ROOT / category_for_task(source.name, cache) / source.name
-                validate_move(source, target)
-                move_tree(source, target)
-                ensure_notes(target)
-                commit_paths(message, source, target)
-                if origin is not None:
-                    commit_leetsync_origin(target, origin)
-                completed += 1
-                print(f"Organized: {target.relative_to(ROOT)}")
-            except (OSError, UnicodeError, ValueError, shutil.Error,
-                    subprocess.SubprocessError) as error:
+                origin = submission(source)
+                if not origin:
+                    raise ValueError("Commit the solution to Git before running the organizer.")
+                target = prepare_task(source, origin)
+                commit_paths(origin["message"], source, target)
+                print(f"Prepared: {target.relative_to(ROOT)}")
+            except (OSError, ValueError, subprocess.SubprocessError, shutil.Error) as error:
                 errors += 1
                 report_error(f"Error processing {source.name}", error)
-        try:
-            remove_empty_directories()
-        except (OSError, ValueError) as error:
-            errors += 1
-            report_error("Could not completely remove solutions/", error)
-        table = generate_table(cache)
-        if save_category_cache(cache, original_cache):
-            commit_paths("Update LeetCode category cache", ROOT / "scripts/leetcode_tags.json")
-        updated = re.sub(
-            TABLE_PATTERN, lambda _: f"{START}\n\n{table}\n\n{END}",
-            original, flags=re.DOTALL,
-        )
-        if updated != original:
-            README.write_text(updated, encoding="utf-8")
+        remove_empty_legacy_directories()
+        update_readme()
         commit_paths("Update README", README)
-        print(f"Done: {completed}/{len(tasks)} directories; errors: {errors}.")
-        return 1 if errors else 0
-    except (OSError, UnicodeError, ValueError, shutil.Error,
-            subprocess.SubprocessError) as error:
+    except (OSError, ValueError, subprocess.SubprocessError, shutil.Error) as error:
+        errors += 1
         report_error("Organizer error", error)
-        return 1
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":
