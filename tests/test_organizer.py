@@ -35,7 +35,11 @@ class OrganizerTests(unittest.TestCase):
         self.git("config", "user.name", "Test Bot")
         self.git("config", "user.email", "test@example.com")
         self.git("config", "commit.gpgsign", "false")
-        self.write("README.md", "Intro\n<!-- START_TABLE -->\n<!-- END_TABLE -->\nFooter\n")
+        self.write("README.md", "Intro\n<details>\n<summary>Latest problems</summary>\n\n"
+                   "<!-- START_TABLE -->\n\n"
+                   "| ID | Problem | Time | Memory | Difficulty | Tags |\n"
+                   "| --- | --- | --- | --- | --- | --- |\n"
+                   "\n<!-- END_TABLE -->\n\n</details>\nFooter\n")
         self.write("scripts/tag_colors.json", (Path(organizer.__file__).parent / "tag_colors.json").read_text())
         self.git("add", ".")
         self.git("commit", "-qm", "Initial")
@@ -134,7 +138,32 @@ class OrganizerTests(unittest.TestCase):
         self.assertEqual(len(rows), 10)
         self.assertIn("12-problem", rows[0])
         self.assertIn("3-problem", rows[-1])
-        self.assertEqual(table.count("<details>"), 1)
+        self.assertNotIn("<details>", table)
+        self.assertNotIn("| ID |", table)
+        self.assertEqual((self.root / "README.md").read_text().count("<details>"), 1)
+
+    def test_readme_preserves_custom_structure_and_table_header(self):
+        self.task()
+        path = self.root / "README.md"
+        original = path.read_text().replace("Intro", "## Custom activity\n\nMy description")
+        original = original.replace("| Problem |", "| My problem |")
+        original = original.replace("| --- | --- |", "| :--- | ---: |", 1)
+        path.write_text(original)
+        self.assertEqual(self.run_organizer(), 0)
+        updated = path.read_text()
+        self.assertEqual(updated.split(organizer.START)[0], original.split(organizer.START)[0])
+        self.assertEqual(updated.split(organizer.END)[1], original.split(organizer.END)[1])
+        self.assertEqual(organizer.table_template(updated), organizer.table_template(original))
+        self.assertIn("| 1 |", updated)
+
+    def test_missing_table_header_fails_before_moving_tasks(self):
+        task, _ = self.task()
+        path = self.root / "README.md"
+        content = "Intro\n<!-- START_TABLE -->\n<!-- END_TABLE -->\nFooter\n"
+        path.write_text(content)
+        self.assertEqual(self.run_organizer(), 1)
+        self.assertTrue(task.exists())
+        self.assertEqual(path.read_text(), content)
 
     def test_new_submission_updates_result_but_keeps_notebook(self):
         task, old = self.task()

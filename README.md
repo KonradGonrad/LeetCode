@@ -39,10 +39,10 @@ do not change a problem's position. Difficulty is read from each problem's
 local README; unavailable values are shown as **—**. Use **💻** to open the
 submitted code and **📝** to open your notebook.
 
-<!-- START_TABLE -->
-
 <details>
 <summary><strong>Latest 10 solved problems</strong></summary>
+
+<!-- START_TABLE -->
 
 | ID | Problem | Time | Memory | Difficulty | Tags |
 | --- | --- | --- | --- | --- | --- |
@@ -57,9 +57,9 @@ submitted code and **📝** to open your notebook.
 | 898 | [Transpose Matrix](./solutions/Easy/898-transpose-matrix) [💻](./solutions/Easy/898-transpose-matrix/transpose-matrix.py) [📝](./solutions/Easy/898-transpose-matrix/notes.ipynb) | 0 ms (100.00%) | 20 MB (15.58%) | ![Easy](./assets/badges/difficulty-easy-d6915875.svg) | ![Array](./assets/badges/tag-array-f0cf39d0.svg) ![Matrix](./assets/badges/tag-matrix-76a2171c.svg) ![Simulation](./assets/badges/tag-simulation-45314e97.svg) |
 | 2903 | [Insert Greatest Common Divisors in Linked List](./solutions/Medium/2903-insert-greatest-common-divisors-in-linked-list) [💻](./solutions/Medium/2903-insert-greatest-common-divisors-in-linked-list/insert-greatest-common-divisors-in-linked-list.py) [📝](./solutions/Medium/2903-insert-greatest-common-divisors-in-linked-list/notes.ipynb) | 12 ms (59.37%) | 23.1 MB (7.08%) | ![Medium](./assets/badges/difficulty-medium-8e588cd1.svg) | ![Linked List](./assets/badges/tag-linked-list-8755a14e.svg) ![Math](./assets/badges/tag-math-d48500ae.svg) ![Number Theory](./assets/badges/tag-number-theory-f6bfc063.svg) |
 
-</details>
-
 <!-- END_TABLE -->
+
+</details>
 
 ## Notebooks
 
@@ -117,7 +117,15 @@ GitHub Actions pushes them after a successful run.
 
 Repeated runs on the same day with unchanged files create no new commits.
 Conflicting notebooks are preserved for manual resolution, and unrelated staged files are excluded.
-The section between the HTML table markers is maintained automatically.
+README.md is the base template: edit headings, descriptions, section order,
+the collapsible section, and the activity image link directly here.
+Inside the `START_TABLE` / `END_TABLE` HTML comments, the organizer preserves
+the two table header lines exactly and replaces only the problem rows.
+Keep the six columns in their existing order; their labels can be renamed.
+The header and rows share a marker block because an HTML comment between them
+would break Markdown table rendering. Keep one marker pair, even when moving
+the Solutions section. The activity script updates only `assets/heatmap.svg`,
+not the Activity section in this file.
 
 ### Tags and colors
 
