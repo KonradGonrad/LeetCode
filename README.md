@@ -21,7 +21,7 @@
 
 <div id="Activity" align="center">
 
-   ## Activity
+   ### Activity
 
    ![Daily LeetCode activity](./assets/heatmap.svg)
 
@@ -36,7 +36,7 @@
 
 <div id="Solutions" align="justify">
 
-   ## Solutions
+   ### Solutions
 
    Expand the table to see the **10 most recently solved problems**.
    Browse the [solutions directory](./solutions) for the full collection.
@@ -75,7 +75,7 @@
 
 <div align="justify">
 
-   ## Notebooks
+   ### Notebooks
 
    Every problem lives in `solutions/Easy/`, `solutions/Medium/`, or `solutions/Hard/`
    under its `<id>-<slug>/` folder, with its code, problem statement,
@@ -105,7 +105,7 @@
 
 <div id="Automation" align="justify">
 
-   ## Automation
+   ### Automation
 
    Difficulty comes from each problem's local README. LeetCode tags are fetched
    by `scripts/fetch_tags.py` and stored in `scripts/leetcode_cache.json` by slug.
