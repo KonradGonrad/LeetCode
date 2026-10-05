@@ -11,6 +11,8 @@ on:
       - "Algorithm/**"
       - "Database/**"
       - "Pandas/**"
+      - "scripts/**"
+      - "README.md"
   workflow_dispatch:
 
 permissions:
@@ -28,7 +30,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v3
         with:
-          ref: test
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
       - name: Set up Python
         uses: actions/setup-python@v4
