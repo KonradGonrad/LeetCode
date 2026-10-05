@@ -8,6 +8,14 @@
             "Simulation"
         ]
     },
+    "binary-search": {
+        "fetched_at": "2026-10-05T14:58:35.508555+00:00",
+        "status": "ok",
+        "tags": [
+            "Array",
+            "Binary Search"
+        ]
+    },
     "concatenation-of-array": {
         "fetched_at": "2026-10-05T12:51:51.162135+00:00",
         "status": "ok",
