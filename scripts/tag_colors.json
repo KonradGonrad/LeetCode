@@ -1,0 +1,14 @@
+{
+    "difficulty": {"Easy": "238636", "Medium": "e3b341", "Hard": "da3633", "Unknown": "6e7681"},
+    "tags": {
+        "Array": "1f6feb", "String": "8957e5", "Hash Table": "0969da",
+        "Two Pointers": "0e7490", "Sliding Window": "0f766e", "Sorting": "7c3aed",
+        "Math": "9a6700", "Dynamic Programming": "be185d", "Memoization": "9d174d",
+        "Stack": "c2410c", "Queue": "b45309", "Monotonic Stack": "9a3412",
+        "Binary Search": "6d28d9", "Linked List": "047857", "Tree": "15803d",
+        "Binary Tree": "166534", "Graph": "b91c1c", "Breadth-First Search": "be123c",
+        "Depth-First Search": "9f1239", "Heap (Priority Queue)": "4338ca",
+        "Backtracking": "a21caf", "Database": "0369a1", "Pandas": "4f46e5"
+    },
+    "palette": ["1f6feb", "8957e5", "0e7490", "0f766e", "be185d", "c2410c", "047857", "4338ca"]
+}
