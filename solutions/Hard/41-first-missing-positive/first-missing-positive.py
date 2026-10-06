@@ -11,6 +11,9 @@ from typing import List
 
 class Solution:
     def firstMissingPositive(self, nums: List[int]) -> int:
+        # When there is empty list nums then it will be 1, added for speed
+        if not nums:
+            return 1
         nums_set = set(nums) # Set of nums without duplicates
 
         # For i: digit in range of 1 to len(nums) + 2 we are searching the digit that is positive (>= 1) and is in range of the digits of the nums or above it, because the seached digit can be greater than the greatest digit in existing nums, for example in [1, 2, 3] we search for 4, thats the corner case as well as when the list is empty so we iterate till the 1, which is the result
