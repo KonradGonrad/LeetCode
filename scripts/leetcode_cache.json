@@ -192,6 +192,17 @@
             "Matrix"
         ]
     },
+    "sort-colors": {
+        "fetched_at": "2026-10-06T11:55:36.513494+00:00",
+        "status": "ok",
+        "tags": [
+            "Array",
+            "Two Pointers",
+            "Sorting",
+            "Quicksort",
+            "Bubble Sort"
+        ]
+    },
     "test-problem": {
         "error": "Problem not found on LeetCode.",
         "fetched_at": "2026-10-05T12:51:57.858755+00:00",
