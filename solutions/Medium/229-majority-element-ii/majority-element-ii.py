@@ -6,12 +6,18 @@ from typing import List
 
 class Solution:
     def majorityElement(self, nums: List[int]) -> List[int]:
+
         treshold = len(nums) // 3
+        digits = set(nums) # set of digits that appear in the nums
+        result = []
 
-        digits = list(set(nums))
-        counter = [0 for digit in digits]
+        if len(digits)!=len(nums):
+            for digit in digits:
+                if nums.count(digit)>treshold:
+                    result.append(digit)
+        
+        else:
+          if len(digits) < 3:
+            return nums
 
-        for i in range(len(nums)):
-          counter[digits.index(nums[i])] += 1
-
-        return [digits[i] for i in range(len(digits)) if counter[i] > treshold]
+        return result
