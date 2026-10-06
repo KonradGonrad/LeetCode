@@ -8,6 +8,15 @@
             "Simulation"
         ]
     },
+    "best-time-to-buy-and-sell-stock-ii": {
+        "fetched_at": "2026-10-06T13:04:11.634881+00:00",
+        "status": "ok",
+        "tags": [
+            "Array",
+            "Dynamic Programming",
+            "Greedy"
+        ]
+    },
     "binary-search": {
         "fetched_at": "2026-10-05T14:58:35.508555+00:00",
         "status": "ok",
