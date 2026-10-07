@@ -1,6 +1,7 @@
 {
-  "source_commit": "11899049a2c0e5b88401cc832f9d29bedfde04d5",
+  "version_id": "310ef45a68aeaa45fd4b117a96dc100a462a84d9",
   "message": "Time: 27 ms (91.19%) | Memory: 22 MB (35.15%) - LeetSync",
   "submitted_at": 1791403358,
-  "organization_commit": "11899049a2c0e5b88401cc832f9d29bedfde04d5"
+  "fingerprint": "f208ab47115e7260e3fa8554fed531ef7203a92203096bb20c7c103e6eb35ceb",
+  "comparison_valid": false
 }
