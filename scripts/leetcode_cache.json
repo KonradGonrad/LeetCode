@@ -239,6 +239,15 @@
             "Bubble Sort"
         ]
     },
+    "subarray-sum-equals-k": {
+        "fetched_at": "2026-10-07T20:03:00.160863+00:00",
+        "status": "ok",
+        "tags": [
+            "Array",
+            "Hash Table",
+            "Prefix Sum"
+        ]
+    },
     "test-problem": {
         "error": "Problem not found on LeetCode.",
         "fetched_at": "2026-10-05T12:51:57.858755+00:00",
