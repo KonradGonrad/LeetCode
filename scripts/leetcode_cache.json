@@ -219,6 +219,14 @@
             "Recursion"
         ]
     },
+    "reverse-string": {
+        "fetched_at": "2026-10-08T15:11:33.710856+00:00",
+        "status": "ok",
+        "tags": [
+            "Two Pointers",
+            "String"
+        ]
+    },
     "roman-to-integer": {
         "fetched_at": "2026-10-05T12:51:57.147637+00:00",
         "status": "ok",
