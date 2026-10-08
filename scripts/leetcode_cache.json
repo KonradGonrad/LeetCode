@@ -110,6 +110,15 @@
             "Floyd's Cycle Finding Algorithm"
         ]
     },
+    "implement-queue-using-stacks": {
+        "fetched_at": "2026-10-08T15:00:39.689812+00:00",
+        "status": "ok",
+        "tags": [
+            "Stack",
+            "Design",
+            "Queue"
+        ]
+    },
     "insert-greatest-common-divisors-in-linked-list": {
         "fetched_at": "2026-10-05T12:51:54.723922+00:00",
         "status": "ok",
