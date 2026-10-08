@@ -113,30 +113,124 @@
    cached entries are not requested again automatically.
 
    ```bash
-   python3 scripts/organizer.py
+   python3 scripts/sync_history.py
    ```
 
-   The workflow currently runs on the **test** branch for solution changes, and
+   The workflow runs on pushes to the **main** and **test** branches, and
    can also be started manually from GitHub Actions.
 
-   1. Move incoming problems into `solutions/<Difficulty>/`, preserving notebooks
-      when LeetSync submits a new version of an existing problem.
-   2. Create missing notebooks and preserve the original solution commit in
-      `.leetsync.json`.
-   3. Commit each changed problem using its original LeetSync message.
-   4. Update the tag cache, SVG activity heatmap, and latest-ten table in a
-      separate `Update README` commit.
+   1. Process incoming commits in order in a temporary local clone, moving problems
+      into `solutions/<Difficulty>/` and preserving personal notebooks.
+   2. Compare normalized file paths, contents and executable modes, excluding
+      generated `.leetsync.json` metadata. Changes to code, statements, notebooks,
+      file names or the tracked folder structure retain a new version commit.
+   3. For consecutive identical versions of a problem, retain one LeetSync commit
+      with the lowest runtime in milliseconds. A tie keeps the earlier result.
+      Memory and percentiles come from the same winning submission; slower results
+      are not stored in metadata. Submissions for other tasks may be interleaved.
+   4. Update the winning commit message and metadata, tag cache, activity heatmap
+      and latest-ten table. Generated changes are folded into the current managed
+      commit, so repeated timings do not accumulate `Update README` commits either.
+
+   `.leetsync-history.json` enables this behavior starting at the commit that adds
+   the configuration. Existing tasks must already be organized at that point.
+   Older history is retained unless the one-time migration below is requested.
+   Existing results serve as the initial best times. New versions use a stable
+   `version_id` in metadata and a `LeetSync-Version` commit trailer; runtime-only
+   improvements preserve the version's original date. The metadata fingerprint
+   records the compared files. Manual task changes create a comparison boundary,
+   including when the code is later reverted to an older implementation.
+
+   History compaction rewrites commit IDs, including descendants of an improved
+   result. It requires a clean checkout on **main** or **test**. Before updating the local
+   branch, the script saves its previous tip under `refs/leetsync/backups/<SHA>`;
+   those local recovery refs are not pushed (Actions checkouts are temporary).
+   The workflow publishes using an explicit `--force-with-lease` against the SHA
+   checked out at the start. If another submission arrives meanwhile, publication
+   fails and a later run processes the remote branch again. GitHub branch rules
+   must permit the workflow to force-push the target branch.
+
+   Ambiguous submissions (including empty commits with no task path), multi-task
+   result commits, signed commits that would need rewriting, symlinks, conflicting
+   notebooks and merges after the checkpoint stop processing without changing the
+   original checkout. Empty timing commits can be identified when immediately
+   preceded by LeetSync's `Added README.md file for <unique problem title>` helper.
+   Empty copies of that README helper are discarded. Without that explicit identity,
+   a runtime-only message cannot identify the problem. Normal LeetSync uploads
+   that recreate the incoming task folder can also be identified. After a remote rewrite, synchronize other local
+   clones with the new history before adding further work.
+
+   **One-time historical migration** uses the same file comparison and runtime
+   rules as future synchronization. It walks the complete history in order,
+   normalizes historical task paths and the organizer's default notebooks for
+   comparison, and retains every real code/statement/notebook/file-structure change.
+   A return to an older implementation remains a separate version. Copies of
+   timings made by the old organizer are not treated as new benchmark runs.
+   Redundant organizer commits and empty README helpers are removed; organizer
+   commits containing real changes remain, with an `Organize <task>` message.
+
+   Preview the committed history without modifying the branch or working files
+   (uncommitted edits are not part of the preview):
+
+   ```bash
+   python3 scripts/sync_history.py --migrate-history --dry-run --offline --report /tmp/leetsync-migration.json
+   ```
+
+   After committing the implementation, apply the migration locally from a clean
+   **main** or **test** checkout:
+
+   ```bash
+   python3 scripts/sync_history.py --migrate-history --offline --report /tmp/leetsync-migration.json
+   ```
+
+   Alternatively, after publishing the implementation, run **Update LeetCode
+   notebooks** manually on **main** or **test** with **migrate_history** checked. The workflow
+   logs the JSON report and publishes with the same explicit force-with-lease.
+   Push-triggered runs do not migrate old history automatically.
+
+   Migration runs in a temporary clone, preserves the final solution files and
+   personal notes byte for byte, repairs metadata references in retained historical
+   snapshots, and refreshes the current best results and README. A local backup ref
+   is created before replacing the branch. Its report lists removed commit counts,
+   retained solution versions and ambiguous results. Ambiguous historical results
+   are retained and reported, never guessed; this differs from live processing,
+   which stops on an unidentified incoming result. Historical merges and signed
+   commits requiring changes stop migration without updating the original branch.
+   The final metadata write for each measured version belongs to its LeetSync
+   result commit. GitHub therefore displays that problem's best result as the
+   folder's latest commit, instead of `Migrate LeetSync history` or another task's
+   timing. Existing result commits are relocated, not duplicated, so this repair
+   does not increase the commit count. User-file snapshots are preserved; a result
+   is only moved if its material snapshot also exists in the next retained commit.
+   Later real code or notebook edits retain their own commit messages. For those
+   unmeasured edits, generated metadata is folded into the existing edit commit,
+   so the migration cannot hide it behind a generic folder message.
+
+   Re-run the same `--migrate-history` command (or the manual workflow) to repair
+   an older migration that shows `Migrate LeetSync history` on all folders. The
+   upgrade does not re-run result selection or change solution files. Use
+   `--dry-run --report /tmp/leetsync-migration.json` to preview it; the report's
+   `folder_results_skipped` explains folders whose current files no longer match
+   a measured version or whose latest commit contains a real edit.
+   The `LeetSync-Migration: 1` and `LeetSync-Folder-Results: 1` markers make further
+   migration requests no-ops after this repair.
+   Subsequent normal synchronization continues from the migrated best results.
+   If real file changes occurred after a task's last measured submission, its first
+   new submission starts a new version, even after a revert. Such tasks are listed
+   in the report's `current_comparison_boundaries`; earlier best results remain in
+   their historical versions.
 
    All automation uses only the Python standard library. No Matplotlib, pandas,
    or other third-party packages are required. The heatmap is generated directly
    as SVG in `assets/heatmap.svg`.
 
    Configure Git's `user.name` and `user.email` before running locally.
-   Incoming solutions must already be committed. The script creates local commits;
-   GitHub Actions pushes them after a successful run.
+   Incoming solutions and the configuration must already be committed. The script
+   updates local history; GitHub Actions publishes it after a successful run.
 
-   Repeated runs on the same day with unchanged files create no new commits.
-   Conflicting notebooks are preserved for manual resolution, and unrelated staged files are excluded.
+   Runs without incoming commits leave history unchanged. The legacy
+   `scripts/organizer.py` remains available for initial folder migration and file
+   previews; it does not compact history. Its commits exclude unrelated staged files.
    README.md is the base template: edit headings, descriptions, section order,
    the collapsible section, and the activity image link directly here.
    Inside the `START_TABLE` / `END_TABLE` HTML comments, the organizer preserves
