@@ -56,15 +56,13 @@ def commit_paths(message, *paths):
     relative = list(dict.fromkeys(path.relative_to(ROOT).as_posix() for path in paths))
     git("add", "-A", "--", *relative)
     
-    # Usunięto ścieżki z diff, aby sprawdzić cały stage
-    diff = git("diff", "--cached", "--quiet", check=False)
+    diff = git("diff", "--cached", "--quiet", "--", *relative, check=False)
     if diff.returncode == 0:
         return False
     if diff.returncode != 1:
         diff.check_returncode()
         
-    # Usunięto flagę --only oraz ścieżki z polecenia commit
-    result = git("commit", "--cleanup=verbatim", "-m", message)
+    result = git("commit", "--only", "--cleanup=verbatim", "-m", message, "--", *relative)
     print(result.stdout.strip())
     return True
 
@@ -112,6 +110,15 @@ def submission(task):
     saved = json.loads(metadata.read_text(encoding="utf-8")) if metadata.exists() else {}
     if not isinstance(saved, dict):
         raise ValueError(f"Invalid submission metadata: {metadata}")
+    if saved.get("version_id"):
+        version = saved["version_id"]
+        if not isinstance(version, str) or not re.fullmatch(r"[0-9a-f]{40,64}", version):
+            raise ValueError(f"Invalid version identifier: {metadata}")
+        revision = git("log", "-1", "--format=%H", "--fixed-strings",
+                       f"--grep=LeetSync-Version: {version}").stdout.strip()
+        if not revision:
+            raise ValueError(f"Missing version commit: {metadata}")
+        return {**saved, "source_commit": revision}
     paths = []
     for path in code_files(task):
         paths.extend([
@@ -160,9 +167,14 @@ def submission(task):
 def notebook_data(task):
     legacy = task / "notes.md"
     check_path(legacy)
-    slug = task.name.split("-", 1)[1]
-    text = legacy.read_text(encoding="utf-8") if legacy.exists() else (
-        f"# {task.name}\n\n"
+    return notebook_from_text(task.name, legacy.read_text(encoding="utf-8") if legacy.exists() else None)
+
+
+def notebook_from_text(name, text=None):
+    """Build the same notebook for working files and historical Git snapshots."""
+    slug = name.split("-", 1)[1]
+    text = text if text is not None else (
+        f"# {name}\n\n"
         f"[Problem on LeetCode](https://leetcode.com/problems/{slug}/)\n\n"
         "## Approach\n\nWrite your reasoning here.\n\n"
         "## Complexity\n\n- Time: \n- Space: \n"
