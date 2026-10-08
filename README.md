@@ -197,7 +197,22 @@
    are retained and reported, never guessed; this differs from live processing,
    which stops on an unidentified incoming result. Historical merges and signed
    commits requiring changes stop migration without updating the original branch.
-   The `LeetSync-Migration: 1` marker makes repeated migration requests no-ops.
+   The final metadata write for each measured version belongs to its LeetSync
+   result commit. GitHub therefore displays that problem's best result as the
+   folder's latest commit, instead of `Migrate LeetSync history` or another task's
+   timing. Existing result commits are relocated, not duplicated, so this repair
+   does not increase the commit count. User-file snapshots are preserved; a result
+   is only moved if its material snapshot also exists in the next retained commit.
+   Later real code or notebook edits retain their own commit messages.
+
+   Re-run the same `--migrate-history` command (or the manual workflow) to repair
+   an older migration that shows `Migrate LeetSync history` on all folders. The
+   upgrade does not re-run result selection or change solution files. Use
+   `--dry-run --report /tmp/leetsync-migration.json` to preview it; the report's
+   `folder_results_skipped` explains folders whose current files no longer match
+   a measured version or whose latest commit contains a real edit.
+   The `LeetSync-Migration: 1` and `LeetSync-Folder-Results: 1` markers make further
+   migration requests no-ops after this repair.
    Subsequent normal synchronization continues from the migrated best results.
    If real file changes occurred after a task's last measured submission, its first
    new submission starts a new version, even after a revert. Such tasks are listed

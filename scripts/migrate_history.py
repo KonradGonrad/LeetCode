@@ -13,6 +13,7 @@ else:
     import sync_history as sync
 
 MIGRATION = "LeetSync-Migration: 1"
+PLACEMENT = "LeetSync-Folder-Results: 1"
 
 
 class History:
@@ -237,6 +238,161 @@ def rewrite(history, commits, aliases, replacements, drops, index_path):
     return mapping
 
 
+def place_folder_results(root):
+    """Relocate current result commits to own their final per-folder metadata.
+
+    Retained commits keep their user-file trees. A result can move only when its
+    material task snapshot is also present in the next retained commit. This
+    avoids losing a transient implementation while keeping one result per version.
+    """
+    head = sync.text(root, "rev-parse", "HEAD")
+    history = History(root)
+    commits = sync.text(root, "rev-list", "--reverse", head).splitlines()
+    if sync.text(root, "rev-list", "--merges", head):
+        raise ValueError("Folder result placement requires linear history")
+    positions = {sha: index for index, sha in enumerate(commits)}
+    moved, skipped = {}, []
+    for task in organizer.discover_tasks():
+        path = task / ".leetsync.json"
+        if not path.exists():
+            continue
+        info = json.loads(path.read_text())
+        version = info.get("version_id")
+        if not version:
+            continue
+        relative = task.relative_to(root).as_posix()
+        latest = sync.text(root, "log", "-1", "--format=%H", "--", relative)
+        anchor = organizer.submission(task)["source_commit"]
+        if latest == anchor:
+            continue
+        if info.get("fingerprint") != sync.fingerprint(sync.snapshot(task)):
+            skipped.append({"task": task.name, "reason": "Current files differ from the measured version"})
+            continue
+        # Never relabel or move a subsequent manual code/notebook edit. The
+        # reported bug is a generated metadata write masking a measured result.
+        last_paths = sync.changed_paths(root, latest)
+        relevant = [name for name in last_paths if sync.task_root(name) == task.relative_to(root)]
+        if any(name != f"{relative}/.leetsync.json" for name in relevant):
+            skipped.append({"task": task.name, "reason": "Latest folder commit contains real file changes"})
+            continue
+        if not positions[anchor]:
+            raise ValueError("Cannot relocate a root result commit")
+        if anchor in moved:
+            raise ValueError("A result commit cannot own multiple task versions")
+        moved[anchor] = {"task": task.name, "path": f"{relative}/.leetsync.json", "info": info}
+    if not moved:
+        return {}, skipped
+    # Prove that deleting each old result node cannot delete a material state.
+    for anchor, record in moved.items():
+        following = next((sha for sha in commits[positions[anchor] + 1:] if sha not in moved), None)
+        before = history.tasks(history.tree(anchor))
+        if following is None or before.get(record["task"]) != history.tasks(history.tree(following)).get(record["task"]):
+            raise ValueError(f"Cannot relocate unique historical snapshot for {record['task']}")
+        parent = commits[positions[anchor] - 1]
+        previous = history.tasks(history.tree(parent))
+        changed_tasks = {name for name in previous.keys() | before.keys() if previous.get(name) != before.get(name)}
+        if changed_tasks - {record["task"]}:
+            raise ValueError(f"Result also changes another task: {anchor}")
+        for name in sync.changed_paths(root, anchor):
+            if sync.task_root(name) is None and not (name == "README.md" or name.startswith("assets/")
+                                                    or name == "scripts/leetcode_cache.json"):
+                raise ValueError(f"Result also changes an unrelated file: {anchor}")
+    versions = {record["info"]["version_id"] for record in moved.values()}
+    mapping = {}
+    env = {"GIT_INDEX_FILE": str(root.parent / "folder-results.index")}
+    for sha in commits:
+        raw = history.commit(sha)
+        headers, message = raw.split(b"\n\n", 1)
+        lines = headers.splitlines()
+        parent = next((line[7:].decode() for line in lines if line.startswith(b"parent ")), None)
+        if sha in moved:
+            mapping[sha] = mapping[parent]
+            continue
+        edits = []
+        for name, (mode, blob) in history.tree(sha).items():
+            if not name.endswith("/.leetsync.json") or sync.task_root(name) is None:
+                continue
+            original = history.blob(blob)
+            info = json.loads(original)
+            # Metadata for a relocated version is introduced with that version's
+            # new node, never left with a dangling SHA or a later generic writer.
+            if info.get("version_id") in versions or info.get("source_commit") in moved:
+                edits.append(f"0 {'0' * len(blob)}\t{name}\0".encode())
+                continue
+            for key in ("source_commit", "organization_commit"):
+                if info.get(key) in mapping:
+                    info[key] = mapping[info[key]]
+            content = (json.dumps(info, ensure_ascii=False, indent=2) + "\n").encode()
+            if content != original:
+                edits.append(f"{mode} {history.store(content)}\t{name}\0".encode())
+        if edits:
+            sync.git(root, "read-tree", sha, env=env)
+            sync.git(root, "update-index", "-z", "--index-info", data=b"".join(edits), env=env)
+            lines[0] = b"tree " + sync.git(root, "write-tree", env=env).strip()
+        lines = [b"parent " + mapping[line[7:].decode()].encode() if line.startswith(b"parent ") else line
+                 for line in lines]
+        updated = b"\n".join(lines) + b"\n\n" + message
+        if updated != raw and any(line.startswith((b"gpgsig ", b"mergetag ")) for line in lines):
+            raise ValueError(f"Cannot rewrite signed historical commit {sha}")
+        mapping[sha] = sync.git(root, "hash-object", "-t", "commit", "-w", "--stdin", data=updated).decode().strip()
+    tip = mapping[head]
+    sync.git(root, "read-tree", tip, env=env)
+    for anchor in sorted(moved, key=positions.get):
+        record = moved[anchor]
+        info = dict(record["info"])
+        # Stable version IDs replace obsolete references to relocated nodes.
+        info.pop("source_commit", None)
+        info.pop("organization_commit", None)
+        blob = history.store((json.dumps(info, ensure_ascii=False, indent=2) + "\n").encode())
+        mode = history.tree(head)[record["path"]][0]
+        sync.git(root, "update-index", "--add", "--cacheinfo", f"{mode},{blob},{record['path']}", env=env)
+        tree = sync.git(root, "write-tree", env=env).strip()
+        headers = history.commit(anchor).split(b"\n\n", 1)[0].splitlines()
+        if any(line.startswith((b"gpgsig ", b"mergetag ")) for line in headers):
+            raise ValueError(f"Cannot relocate signed result {anchor}")
+        headers = [b"tree " + tree if line.startswith(b"tree ") else
+                   b"parent " + tip.encode() if line.startswith(b"parent ") else line for line in headers]
+        message = info["message"].rstrip() + "\n\n" + sync.VERSION + info["version_id"] + "\n"
+        tip = sync.git(root, "hash-object", "-t", "commit", "-w", "--stdin",
+                       data=b"\n".join(headers) + b"\n\n" + message.encode()).decode().strip()
+        mapping[anchor] = tip
+    # Moving nodes is count-neutral; only metadata may differ at the final tree.
+    for name in sync.git(root, "diff", "--name-only", "-z", head, tip).split(b"\0"):
+        if name and not name.endswith(b"/.leetsync.json"):
+            raise ValueError(f"Folder result placement changed a user file: {name.decode()}")
+    sync.git(root, "checkout", "--detach", tip)
+    return mapping, skipped
+
+
+def mark_placement(root):
+    """Put the checkpoint on the last result without touching any file trees."""
+    head = sync.text(root, "rev-parse", "HEAD")
+    raw = sync.git(root, "cat-file", "commit", head)
+    headers, message = raw.split(b"\n\n", 1)
+    for marker in (PLACEMENT, sync.CHECKPOINT):
+        if marker not in message.decode().splitlines():
+            message = message.rstrip() + b"\n\n" + marker.encode() + b"\n"
+    if any(line.startswith((b"gpgsig ", b"mergetag ")) for line in headers.splitlines()):
+        raise ValueError("Cannot mark a signed commit as the placement checkpoint")
+    new = sync.git(root, "hash-object", "-t", "commit", "-w", "--stdin",
+                   data=headers + b"\n\n" + message).decode().strip()
+    sync.git(root, "update-ref", "HEAD", new, head)
+    return head, new
+
+
+def repair_placement(root, head):
+    sync.git(root, "checkout", "--detach", head)
+    before = int(sync.text(root, "rev-list", "--count", head))
+    _, skipped = place_folder_results(root)
+    _, final = mark_placement(root)
+    return {"original_head": head, "new_head": final, "commits_before": before,
+            "commits_after": int(sync.text(root, "rev-list", "--count", final)),
+            "versions_kept": len(sync.text(root, "log", "--format=%H", "--fixed-strings",
+                                          f"--grep={sync.VERSION}").splitlines()),
+            "already_migrated": False, "repaired_folder_results": True,
+            "folder_results_skipped": skipped, "ambiguous_results": []}
+
+
 def build(root, head, offline):
     commits = sync.text(root, "rev-list", "--reverse", head).splitlines()
     history = History(root)
@@ -262,7 +418,11 @@ def build(root, head, offline):
     entries = organizer.collect_entries()
     organizer.activity.write_heatmap(entries, root / "assets/heatmap.svg")
     organizer.update_readme(entries)
-    final = sync.make_commit(root, "Migrate LeetSync history\n\n" + MIGRATION + "\n" + sync.CHECKPOINT, allow_empty=True)
+    sync.make_commit(root, "Migrate LeetSync history\n\n" + MIGRATION + "\n" + sync.CHECKPOINT, allow_empty=True)
+    placed, skipped = place_folder_results(root)
+    previous_tip, final = mark_placement(root)
+    mapping = {old: placed.get(new, new) for old, new in mapping.items()}
+    mapping = {old: final if new == previous_tip else new for old, new in mapping.items()}
     changed = sync.git(root, "diff", "--name-only", "-z", head, final).split(b"\0")
     for item in changed:
         path = item.decode()
@@ -272,6 +432,7 @@ def build(root, head, offline):
     report.update({"original_head": head, "new_head": final, "commits_before": len(commits),
                    "commits_after": int(sync.text(root, "rev-list", "--count", final)),
                    "versions_kept": len(groups), "already_migrated": False,
+                   "folder_results_skipped": skipped,
                    "current_comparison_boundaries": sorted(name for name, group in records.items()
                        if name in final_tasks and (not group["eligible"]
                            or group["fingerprint"] != final_tasks[name]["fingerprint"])),
@@ -293,7 +454,10 @@ def migrate(root, *, offline=False, dry_run=False):
         raise ValueError("Fetch the full history before migrating")
     head = sync.text(root, "rev-parse", "HEAD")
     markers = sync.text(root, "log", "--format=%H", "--fixed-strings", f"--grep={MIGRATION}").splitlines()
-    if any(MIGRATION in sync.text(root, "show", "-s", "--format=%B", sha).splitlines() for sha in markers):
+    migrated = any(MIGRATION in sync.text(root, "show", "-s", "--format=%B", sha).splitlines() for sha in markers)
+    placements = sync.text(root, "log", "--format=%H", "--fixed-strings", f"--grep={PLACEMENT}").splitlines()
+    placed = any(PLACEMENT in sync.text(root, "show", "-s", "--format=%B", sha).splitlines() for sha in placements)
+    if migrated and placed:
         return {"original_head": head, "new_head": head, "already_migrated": True}
     if sync.text(root, "rev-list", "--merges", head):
         raise ValueError("Historical merges require manual migration")
@@ -303,7 +467,7 @@ def migrate(root, *, offline=False, dry_run=False):
         for key in ("user.name", "user.email"):
             sync.git(work, "config", key, sync.text(root, "config", key))
         with sync.at_root(work):
-            report = build(work, head, offline)
+            report = repair_placement(work, head) if migrated else build(work, head, offline)
         if not dry_run:
             if sync.text(root, "rev-parse", "HEAD") != head or sync.text(root, "status", "--porcelain", "--untracked-files=all"):
                 raise ValueError("Checkout changed during migration; no history updated")

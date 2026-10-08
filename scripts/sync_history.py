@@ -196,7 +196,7 @@ def rewrite_messages(root, replacements):
         if old in replacements:
             # Keep version/checkpoint trailers on commits managed by this script.
             trailers = [line for line in message.decode().splitlines()
-                        if line.startswith(VERSION) or line == CHECKPOINT]
+                        if line.startswith((VERSION, "LeetSync-Folder-Results: ")) or line == CHECKPOINT]
             message = (replacements[old].rstrip() + ("\n\n" + "\n".join(trailers) if trailers else "") + "\n").encode()
         rebuilt = b"\n".join(updated) + b"\n\n" + message
         if rebuilt != raw:
@@ -343,6 +343,15 @@ def process(root, base, pending, offline):
         git(root, "update-ref", "HEAD", new, final)
     else:
         make_commit(root, "Update README\n\n" + CHECKPOINT, allow_empty=True)
+    # Updating A's metadata inside B's final commit would make GitHub show B's
+    # timing for folder A. Keep each folder's generated write with its own result.
+    if __package__:
+        from . import migrate_history
+    else:
+        import migrate_history
+    placed, _ = migrate_history.place_folder_results(root)
+    if placed:
+        migrate_history.mark_placement(root)
     return text(root, "rev-parse", "HEAD")
 
 

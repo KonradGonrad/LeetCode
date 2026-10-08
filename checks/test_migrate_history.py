@@ -3,12 +3,70 @@
 import contextlib
 import io
 import json
+from unittest.mock import patch
 
 from checks.test_sync_history import GitFixture
 from scripts import migrate_history as migration, organizer, sync_history as sync
 
 
 class MigrationTests(GitFixture):
+    def test_folder_latest_commit_displays_its_best_leetsync_result(self):
+        self.submit(12)
+        self.repeat(8)
+        self.organize()
+        self.migrate()
+        self.assertEqual(
+            self.git("log", "-1", "--format=%s", "--", "solutions/Easy/1-example"),
+            self.metadata()["message"],
+        )
+
+    def assert_folder_results(self, names):
+        for name in names:
+            with self.subTest(task=name):
+                self.assertEqual(self.git("log", "-1", "--format=%s", "--", f"solutions/Easy/{name}"),
+                                 self.metadata(name)["message"])
+
+    def test_multiple_folders_keep_their_own_result_after_future_improvement(self):
+        self.submit(12)
+        self.repeat(8)
+        self.organize()
+        self.submit(3, name="2-other")
+        self.organize()
+        self.migrate()
+        self.assert_folder_results(("1-example", "2-other"))
+        count = self.git("rev-list", "--count", "HEAD")
+        self.submit(6)
+        self.run_sync()
+        self.assert_folder_results(("1-example", "2-other"))
+        self.assertEqual(self.git("rev-list", "--count", "HEAD"), count)
+        self.assertEqual(len(self.versions()), 2)
+        self.submit(5)
+        self.run_sync()
+        self.assert_folder_results(("1-example", "2-other"))
+        self.assertTrue(self.migrate()["already_migrated"])
+
+    def test_existing_v1_migration_can_be_repaired_without_extra_commits(self):
+        self.submit(12)
+        self.repeat(8)
+        self.organize()
+        self.submit(3, name="2-other")
+        self.organize()
+        # Reproduce the old finalizer: all metadata belongs to one migration node.
+        with patch.object(migration, "place_folder_results", return_value=({}, [])), \
+                patch.object(migration, "mark_placement", side_effect=lambda root: (
+                    sync.text(root, "rev-parse", "HEAD"), sync.text(root, "rev-parse", "HEAD"))):
+            self.migrate()
+        self.assertEqual(self.git("log", "-1", "--format=%s", "--", "solutions/Easy/1-example"),
+                         "Migrate LeetSync history")
+        count, tree = self.git("rev-list", "--count", "HEAD"), self.git("rev-parse", "HEAD^{tree}")
+        report = self.migrate()
+        self.assertTrue(report["repaired_folder_results"])
+        self.assert_folder_results(("1-example", "2-other"))
+        self.assertEqual(self.git("rev-list", "--count", "HEAD"), count)
+        self.assertEqual(self.git("rev-parse", "HEAD^{tree}"), tree)
+        self.assertEqual(len(self.versions()), 2)
+        self.assertTrue(self.migrate()["already_migrated"])
+
     def organize(self):
         with sync.at_root(self.root), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(organizer.main(offline=True), 0)
