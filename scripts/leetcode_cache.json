@@ -319,5 +319,14 @@
             "Stack",
             "Bracket Sequences"
         ]
+    },
+    "valid-sudoku": {
+        "fetched_at": "2026-10-08T08:46:24.719174+00:00",
+        "status": "ok",
+        "tags": [
+            "Array",
+            "Hash Table",
+            "Matrix"
+        ]
     }
 }
