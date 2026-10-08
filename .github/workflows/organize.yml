@@ -5,12 +5,12 @@ on:
   push:
     branches:
       - test
-    paths:
-      - "solutions/**"
-      - "Algorithm/**"
-      - "Database/**"
-      - "Pandas/**"
   workflow_dispatch:
+    inputs:
+      migrate_history:
+        description: Migrate historical LeetSync results once before normal synchronization
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -21,6 +21,7 @@ concurrency:
 
 jobs:
   organize:
+    if: github.ref == 'refs/heads/test'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -37,7 +38,14 @@ jobs:
         run: |
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
-      - name: Prepare notebooks and update README
-        run: python scripts/organizer.py
-      - name: Push generated commits
-        run: git push
+      - name: Remember remote branch before processing
+        run: echo "EXPECTED_HEAD=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Migrate historical results when requested
+        if: github.event_name == 'workflow_dispatch' && inputs.migrate_history
+        run: |
+          python scripts/sync_history.py --migrate-history --report "$RUNNER_TEMP/leetsync-migration.json"
+          cat "$RUNNER_TEMP/leetsync-migration.json"
+      - name: Normalize submissions and retain best runtimes
+        run: python scripts/sync_history.py
+      - name: Publish only if the remote branch has not changed
+        run: git push --force-with-lease="refs/heads/test:$EXPECTED_HEAD" origin HEAD:refs/heads/test

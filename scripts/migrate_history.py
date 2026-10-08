@@ -1,0 +1,314 @@
+"""One-time, conservative migration of historical LeetSync result commits."""
+
+from collections import defaultdict
+import json
+from pathlib import Path
+import re
+import tempfile
+
+if __package__:
+    from . import organizer, sync_history as sync
+else:
+    import organizer
+    import sync_history as sync
+
+MIGRATION = "LeetSync-Migration: 1"
+
+
+class History:
+    """Read original Git objects; never execute scripts from historical commits."""
+
+    def __init__(self, root):
+        self.root = root
+        self.blobs = {}
+        self.trees = {}
+        self.raw_commits = {}
+        self.normalized = {}
+
+    def blob(self, sha):
+        if sha not in self.blobs:
+            self.blobs[sha] = sync.git(self.root, "cat-file", "blob", sha)
+        return self.blobs[sha]
+
+    def store(self, content):
+        sha = sync.git(self.root, "hash-object", "-w", "--stdin", data=content).decode().strip()
+        self.blobs[sha] = content
+        return sha
+
+    def commit(self, sha):
+        if sha not in self.raw_commits:
+            self.raw_commits[sha] = sync.git(self.root, "cat-file", "commit", sha)
+        return self.raw_commits[sha]
+
+    def tree(self, sha):
+        tree_id = self.commit(sha).splitlines()[0].split()[1].decode()
+        if tree_id not in self.trees:
+            entries = {}
+            for entry in sync.git(self.root, "ls-tree", "-r", "-z", tree_id).split(b"\0"):
+                if entry:
+                    header, name = entry.split(b"\t", 1)
+                    mode, _, blob = header.decode().split()
+                    entries[name.decode()] = (mode, blob)
+            self.trees[tree_id] = entries
+        return self.trees[tree_id]
+
+    def tasks(self, tree):
+        grouped = defaultdict(dict)
+        for name, entry in tree.items():
+            folder = sync.task_root(name)
+            if folder is not None:
+                grouped[folder][Path(name).relative_to(folder).as_posix()] = entry
+        aliases = defaultdict(list)
+        for folder, files in grouped.items():
+            aliases[folder.name].append((folder, files))
+        result = {}
+        for name, folders in aliases.items():
+            key = tuple(sorted((str(folder), tuple(sorted(files.items()))) for folder, files in folders))
+            if key in self.normalized:
+                result[name] = self.normalized[key]
+                continue
+            merged = {}
+            raw = [folder for folder, _ in folders
+                   if folder.parent not in [Path("solutions") / level for level in ("Easy", "Medium", "Hard", "Unknown")]]
+            if len(raw) > 1:
+                raise ValueError(f"Ambiguous historical input folders for {name}: {raw}")
+            # As in the live organizer, an incoming upload overlays the existing
+            # canonical folder, while existing notebooks remain in place.
+            for folder, files in sorted(folders, key=lambda item: (item[0] in raw, str(item[0]))):
+                for filename, entry in files.items():
+                    if filename == ".leetsync.json":
+                        continue
+                    if filename in merged and (filename.endswith(".ipynb") or filename == "notes.md") and merged[filename] != entry:
+                        raise ValueError(f"Conflicting historical personal notes for {name}")
+                    if entry[0] not in ("100644", "100755"):
+                        raise ValueError(f"Unsupported historical file mode in {name}/{filename}")
+                    merged[filename] = entry
+            statement = self.blob(merged["README.md"][1]).decode() if "README.md" in merged else ""
+            difficulty = re.search(r"Difficulty\s*[:\-]\s*(Easy|Medium|Hard)\b", statement, re.I)
+            level = difficulty[1].capitalize() if difficulty else "Unknown"
+            has_code = any(Path(filename).suffix.lower() in organizer.CODE_EXTENSIONS for filename in merged)
+            if has_code and "notes.ipynb" not in merged:
+                legacy = merged.pop("notes.md", None)
+                content = self.blob(legacy[1]).decode() if legacy else None
+                notebook = organizer.notebook_from_text(name, content)
+                blob = self.store((json.dumps(notebook, ensure_ascii=False, indent=2) + "\n").encode())
+                merged["notes.ipynb"] = ("100644", blob)
+            files = [(f"solutions/{level}/{name}/{filename}", mode == "100755", self.blob(blob))
+                     for filename, (mode, blob) in sorted(merged.items())]
+            value = {"fingerprint": sync.fingerprint(files), "has_code": has_code}
+            self.normalized[key] = value
+            result[name] = value
+        return result
+
+
+def analyze(history, commits):
+    records, groups, aliases, replacements, drops = {}, [], {}, {}, set()
+    report = {"collapsed_results": 0, "removed_organizer_commits": 0,
+              "removed_readme_helpers": 0, "ambiguous_results": []}
+    previous_tree, previous_tasks = {}, {}
+    for index, sha in enumerate(commits):
+        tree = history.tree(sha)
+        tasks = history.tasks(tree)
+        message = history.commit(sha).split(b"\n\n", 1)[1].decode().strip()
+        paths = {path for path in previous_tree.keys() | tree.keys()
+                 if previous_tree.get(path) != tree.get(path)}
+        roots = {sync.task_root(path) for path in paths}
+        names = {folder.name for folder in roots if folder is not None}
+        elapsed = sync.runtime(message)
+        if message.startswith("Added README.md file for "):
+            helper = sync.readme_identity(history.root, sha)
+            if helper and not paths and index:
+                drops.add(sha)
+                report["removed_readme_helpers"] += 1
+        managed = any(line.startswith(sync.VERSION) for line in message.splitlines())
+        outside = [path for path in paths if sync.task_root(path) is None]
+        allowed_generated = all(path == "README.md" or path.startswith("assets/")
+                                or path == "scripts/leetcode_cache.json" for path in outside)
+        name = next(iter(names)) if len(names) == 1 and (not outside or managed and allowed_generated) else None
+        if elapsed is not None and not paths:
+            folder = sync.empty_submission_folder(history.root, sha)
+            name = folder.name if folder is not None else None
+        organized = False
+        if name and elapsed is not None and not managed:
+            for path in paths:
+                if path.endswith("/.leetsync.json") and path in tree:
+                    metadata = json.loads(history.blob(tree[path][1]))
+                    if not isinstance(metadata, dict):
+                        raise ValueError(f"Invalid historical metadata: {path} in {sha}")
+                    source = metadata.get("source_commit")
+                    if source in aliases:
+                        organized = True
+        if organized:
+            # These messages copy a submission's old timing; they are not runs.
+            if tasks == previous_tasks and not outside and index:
+                drops.add(sha)
+                report["removed_organizer_commits"] += 1
+            else:
+                replacements[sha] = f"Organize {name}"
+        elif elapsed is not None and name and tasks.get(name, {}).get("has_code"):
+            current = tasks[name]["fingerprint"]
+            prior = records.get(name)
+            if prior and prior["eligible"] and prior["fingerprint"] == current:
+                # Removing a result must not remove a real normalized transition.
+                if tasks != previous_tasks:
+                    raise ValueError(f"Unexpected material change in duplicate {sha}")
+                if elapsed < sync.runtime(prior["message"]):
+                    prior["message"] = message.split("\n\n", 1)[0]
+                aliases[sha] = prior
+                drops.add(sha)
+                report["collapsed_results"] += 1
+            else:
+                version = next((line[len(sync.VERSION):] for line in message.splitlines()
+                                if line.startswith(sync.VERSION)), sha)
+                prior = {"anchor": sha, "version_id": version, "name": name,
+                         "message": message.split("\n\n", 1)[0],
+                         "submitted_at": int(sync.text(history.root, "show", "-s", "--format=%ct", sha)),
+                         "fingerprint": current, "eligible": True}
+                records[name] = prior
+                groups.append(prior)
+                aliases[sha] = prior
+        else:
+            if elapsed is not None:
+                report["ambiguous_results"].append({"commit": sha, "reason": "No unambiguous task identity"})
+            # A manual edit remains a boundary even if a later edit restores A.
+            for changed in previous_tasks.keys() | tasks.keys():
+                if previous_tasks.get(changed) != tasks.get(changed) and changed in records:
+                    records[changed]["eligible"] = False
+        if organized:
+            for changed in previous_tasks.keys() | tasks.keys():
+                if previous_tasks.get(changed) != tasks.get(changed) and changed in records:
+                    records[changed]["eligible"] = False
+        previous_tree, previous_tasks = tree, tasks
+    for group in groups:
+        replacements[group["anchor"]] = group["message"] + "\n\n" + sync.VERSION + group["version_id"]
+    return records, groups, aliases, replacements, drops, report
+
+
+def rewrite(history, commits, aliases, replacements, drops, index_path):
+    mapping = {}
+    env = {"GIT_INDEX_FILE": str(index_path)}
+    for sha in commits:
+        raw = history.commit(sha)
+        headers, message = raw.split(b"\n\n", 1)
+        lines = headers.splitlines()
+        parents = [line[7:].decode() for line in lines if line.startswith(b"parent ")]
+        if sha in drops:
+            if not parents:
+                raise ValueError("Cannot remove the root commit")
+            mapping[sha] = mapping[parents[0]]
+            continue
+        # Rewrite metadata references in every retained snapshot, not just HEAD.
+        edits = []
+        for path, (mode, blob) in history.tree(sha).items():
+            if not path.endswith("/.leetsync.json") or sync.task_root(path) is None:
+                continue
+            original = history.blob(blob)
+            info = json.loads(original)
+            if not isinstance(info, dict):
+                raise ValueError(f"Invalid historical metadata: {path} in {sha}")
+            group = aliases.get(info.get("source_commit"))
+            for key in ("source_commit", "organization_commit"):
+                old = info.get(key)
+                if old in aliases and key == "source_commit":
+                    old = aliases[old]["anchor"]
+                if old in mapping:
+                    info[key] = mapping[old]
+            if group:
+                info["message"] = group["message"]
+                info["submitted_at"] = group["submitted_at"]
+            content = (json.dumps(info, ensure_ascii=False, indent=2) + "\n").encode()
+            if content != original:
+                edits.append(f"{mode} {history.store(content)}\t{path}\0".encode())
+        if edits:
+            sync.git(history.root, "read-tree", sha, env=env)
+            sync.git(history.root, "update-index", "-z", "--index-info", data=b"".join(edits), env=env)
+            tree = sync.git(history.root, "write-tree", env=env).strip()
+            lines[0] = b"tree " + tree
+        lines = [b"parent " + mapping[line[7:].decode()].encode() if line.startswith(b"parent ") else line
+                 for line in lines]
+        if sha in replacements:
+            message = (replacements[sha].rstrip() + "\n").encode()
+        updated = b"\n".join(lines) + b"\n\n" + message
+        if updated != raw and any(line.startswith((b"gpgsig ", b"mergetag ")) for line in lines):
+            raise ValueError(f"Cannot rewrite signed historical commit {sha}")
+        mapping[sha] = sync.git(
+            history.root, "hash-object", "-t", "commit", "-w", "--stdin", data=updated,
+        ).decode().strip()
+    return mapping
+
+
+def build(root, head, offline):
+    commits = sync.text(root, "rev-list", "--reverse", head).splitlines()
+    history = History(root)
+    records, groups, aliases, replacements, drops, report = analyze(history, commits)
+    mapping = rewrite(history, commits, aliases, replacements, drops, root.parent / "migration.index")
+    sync.git(root, "checkout", "--detach", mapping[head])
+    final_tasks = history.tasks(history.tree(head))
+    for task in organizer.discover_tasks():
+        if task.parent.parent != root / "solutions" or task.parent.name not in ("Easy", "Medium", "Hard", "Unknown"):
+            raise ValueError("Organize the current checkout before migrating history")
+        group = records.get(task.name)
+        if group and group["fingerprint"] == final_tasks[task.name]["fingerprint"]:
+            info = {key: group[key] for key in ("version_id", "message", "submitted_at", "fingerprint")}
+            if not group["eligible"]:
+                info["comparison_valid"] = False
+            sync.write_metadata(task, info)
+        elif (task / ".leetsync.json").exists():
+            info = json.loads((task / ".leetsync.json").read_text())
+            info["comparison_valid"] = False
+            sync.write_metadata(task, info)
+    if not offline:
+        organizer.fetch_tags.update_cache(organizer.discover_tasks(), root / "scripts/leetcode_cache.json")
+    entries = organizer.collect_entries()
+    organizer.activity.write_heatmap(entries, root / "assets/heatmap.svg")
+    organizer.update_readme(entries)
+    final = sync.make_commit(root, "Migrate LeetSync history\n\n" + MIGRATION + "\n" + sync.CHECKPOINT, allow_empty=True)
+    changed = sync.git(root, "diff", "--name-only", "-z", head, final).split(b"\0")
+    for item in changed:
+        path = item.decode()
+        if path and not (path == "README.md" or path.startswith("assets/")
+                         or path == "scripts/leetcode_cache.json" or path.endswith("/.leetsync.json")):
+            raise ValueError(f"Migration unexpectedly changed a user file: {path}")
+    report.update({"original_head": head, "new_head": final, "commits_before": len(commits),
+                   "commits_after": int(sync.text(root, "rev-list", "--count", final)),
+                   "versions_kept": len(groups), "already_migrated": False,
+                   "current_comparison_boundaries": sorted(name for name, group in records.items()
+                       if name in final_tasks and (not group["eligible"]
+                           or group["fingerprint"] != final_tasks[name]["fingerprint"])),
+                   "versions": [{"task": group["name"], "message": group["message"],
+                                 "commit": mapping[group["anchor"]]} for group in groups]})
+    return report
+
+
+def migrate(root, *, offline=False, dry_run=False):
+    root = Path(root).resolve()
+    if sync.text(root, "symbolic-ref", "--short", "HEAD") != "test":
+        raise ValueError("History migration is restricted to the test branch")
+    if not dry_run and sync.text(root, "status", "--porcelain", "--untracked-files=all"):
+        raise ValueError("Commit or stash local changes before migrating history")
+    if not dry_run and (not sync.text(root, "ls-files", "--", sync.CONFIG)
+                        or json.loads((root / sync.CONFIG).read_text()) != {"schema": 1}):
+        raise ValueError(f"Commit the supported {sync.CONFIG} configuration before migration")
+    if sync.text(root, "rev-parse", "--is-shallow-repository") == "true":
+        raise ValueError("Fetch the full history before migrating")
+    head = sync.text(root, "rev-parse", "HEAD")
+    markers = sync.text(root, "log", "--format=%H", "--fixed-strings", f"--grep={MIGRATION}").splitlines()
+    if any(MIGRATION in sync.text(root, "show", "-s", "--format=%B", sha).splitlines() for sha in markers):
+        return {"original_head": head, "new_head": head, "already_migrated": True}
+    if sync.text(root, "rev-list", "--merges", head):
+        raise ValueError("Historical merges require manual migration")
+    with tempfile.TemporaryDirectory(prefix="leetsync-migration-") as directory:
+        work = Path(directory) / "repo"
+        sync.git(root, "clone", "--no-hardlinks", "--no-checkout", str(root), str(work))
+        for key in ("user.name", "user.email"):
+            sync.git(work, "config", key, sync.text(root, "config", key))
+        with sync.at_root(work):
+            report = build(work, head, offline)
+        if not dry_run:
+            if sync.text(root, "rev-parse", "HEAD") != head or sync.text(root, "status", "--porcelain", "--untracked-files=all"):
+                raise ValueError("Checkout changed during migration; no history updated")
+            sync.git(root, "fetch", "--no-tags", str(work), report["new_head"])
+            sync.git(root, "update-ref", f"refs/leetsync/backups/{head}", head)
+            sync.git(root, "reset", "--keep", report["new_head"])
+    report["dry_run"] = dry_run
+    return report
