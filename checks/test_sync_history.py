@@ -241,6 +241,55 @@ class SyncHistoryTests(GitFixture):
             self.run_sync()
         self.assertEqual(self.head(), head)
 
+    def test_empty_result_after_reupload_uses_incoming_task_folder(self):
+        self.submit(50, code="old_code\n")
+        self.run_sync()
+        self.submit(47, code="new_code\n")
+        self.commit("Added README.md file for Example")
+        self.commit("Time: 42 ms | Memory: 19 MB - LeetSync")
+        self.run_sync()
+        self.assertEqual(len(self.versions()), 2)
+        self.assertIn("Time: 42 ms", self.metadata()["message"])
+        self.assertEqual((self.root / "solutions/Easy/1-example/solution.py").read_text(), "new_code\n")
+        self.assertFalse((self.root / "solutions/1-example").exists())
+        head = self.head()
+        self.assertEqual(self.run_sync(), head)
+
+    def test_empty_result_for_identical_reupload_keeps_one_best_version(self):
+        self.submit(12)
+        self.run_sync()
+        count = self.git("rev-list", "--count", "HEAD")
+        self.submit(15)
+        for ms in (8, 11):
+            self.commit("Added README.md file for Example")
+            self.commit(f"Time: {ms} ms | Memory: 19 MB - LeetSync")
+        self.run_sync()
+        self.assertEqual(len(self.versions()), 1)
+        self.assertEqual(self.git("rev-list", "--count", "HEAD"), count)
+        self.assertIn("Time: 8 ms", self.metadata()["message"])
+
+    def test_empty_result_with_multiple_incoming_folders_is_rejected(self):
+        self.submit(12)
+        self.run_sync()
+        self.submit(10)
+        self.submit(9, prefix="Algorithm")
+        self.commit("Added README.md file for Example")
+        self.commit("Time: 8 ms - LeetSync")
+        head = self.head()
+        self.assertIsNone(sync.empty_submission_folder(self.root, head))
+        with self.assertRaisesRegex(ValueError, "Cannot identify"):
+            self.run_sync()
+        self.assertEqual(self.head(), head)
+
+    def test_empty_result_with_different_difficulty_alias_is_rejected(self):
+        self.submit(12)
+        self.run_sync()
+        self.submit(10)
+        self.write("solutions/1-example/README.md", "Difficulty: Medium\n")
+        self.commit("Added README.md file for Example")
+        self.commit("Time: 8 ms - LeetSync")
+        self.assertIsNone(sync.empty_submission_folder(self.root, self.head()))
+
     def test_explicit_readme_pair_identifies_queued_empty_result(self):
         self.submit(12)
         self.commit("Added README.md file for Example")
