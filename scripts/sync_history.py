@@ -262,9 +262,14 @@ def process(root, base, pending, offline):
         if not paths:
             folder = empty_submission_folder(root, original)
             roots = {folder} if folder is not None else set()
-        if len(roots) != 1 or None in roots:
+        names = {folder for folder in roots if folder is not None}
+        outside = [path for path in paths if task_root(path) is None]
+        managed = any(line == CHECKPOINT or line.startswith(VERSION) for line in message.splitlines())
+        allowed_generated = all(path == "README.md" or path.startswith("assets/")
+                                or path == "scripts/leetcode_cache.json" for path in outside)
+        if len(names) != 1 or (outside and not (managed and allowed_generated)):
             raise ValueError(f"Cannot identify one task for LeetSync commit {original}")
-        folder = roots.pop()
+        folder = names.pop()
         if any(Path(path).name == ".leetsync.json" for path in paths):
             raise ValueError("Incoming LeetSync commits must not modify generated metadata")
         apply_paths(root, original, paths)
