@@ -104,8 +104,23 @@ def empty_submission_folder(root, revision):
     if name is None:
         return None
     folders = [folder for folder in task_roots_at(root, revision) if folder.name == name]
-    # Multiple aliases with conflicting contents require explicit changed paths.
-    return folders[0] if len(folders) == 1 else None
+    if len(folders) == 1:
+        return folders[0]
+    # A queued upload coexists with the older organized copy. The README helper
+    # identifies the task; one incoming folder identifies the submitted version.
+    # Restore that input just as for a nonempty submission, never the stale copy.
+    incoming = [folder for folder in folders if not (
+        folder.parent.parent == Path("solutions")
+        and folder.parent.name in ("Easy", "Medium", "Hard", "Unknown"))]
+    if len(folders) != 2 or len(incoming) != 1:
+        return None
+    source = incoming[0]
+    statement = source / "README.md"
+    content = (git(root, "show", f"{revision}:{statement.as_posix()}").decode("utf-8")
+               if git(root, "ls-tree", revision, "--", statement.as_posix()) else "")
+    match = re.search(r"Difficulty\s*[:\-]\s*(Easy|Medium|Hard)\b", content, re.I)
+    target = Path("solutions") / (match[1].capitalize() if match else "Unknown") / source.name
+    return source if set(folders) == {source, target} else None
 
 
 def snapshot(task):
