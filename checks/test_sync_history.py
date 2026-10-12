@@ -241,6 +241,19 @@ class SyncHistoryTests(GitFixture):
             self.run_sync()
         self.assertEqual(self.head(), head)
 
+    def test_managed_result_commit_allows_generated_files_outside_task(self):
+        self.write("solutions/1-example/solution.py", "pass\n")
+        self.write("solutions/1-example/README.md", "Difficulty: Easy\n")
+        self.write("README.md", "<!-- START_TABLE -->\n"
+                   "| ID | Problem | Time | Memory | Difficulty | Tags |\n"
+                   "| --- | --- | --- | --- | --- | --- |\n"
+                   "| 1 | Example | — | — | Easy | — |\n<!-- END_TABLE -->\n")
+        self.commit("Time: 8 ms (50.00%) | Memory: 20 MB (40.00%) - LeetSync\n\n"
+                    + sync.VERSION + ("a" * 40))
+        self.run_sync()
+        self.assertEqual(len(self.versions()), 1)
+        self.assertIn("Time: 8 ms", self.metadata()["message"])
+
     def test_explicit_readme_pair_identifies_queued_empty_result(self):
         self.submit(12)
         self.commit("Added README.md file for Example")
