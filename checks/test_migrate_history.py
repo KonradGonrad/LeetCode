@@ -10,6 +10,24 @@ from scripts import migrate_history as migration, organizer, sync_history as syn
 
 
 class MigrationTests(GitFixture):
+    def test_repair_normalized_results_with_reuploaded_readme(self):
+        self.submit(415)
+        self.run_sync()
+        self.write("solutions/1-example/README.md", "Difficulty: Easy\n")
+        self.commit("Added README.md file for Example")
+        self.write("solutions/1-example/solution.py", "pass\n")
+        self.commit("Time: 414 ms - LeetSync")
+        # Reproduce the old synchronizer's unnecessary version boundary.
+        with patch.object(sync, "readme_identity", return_value=None):
+            self.run_sync()
+        self.assertEqual(len(self.versions()), 2)
+        before = self.user_files()
+        with sync.at_root(self.root):
+            migration.build(self.root, self.head(), True)
+        self.assertEqual(len(self.versions()), 1)
+        self.assertEqual(self.user_files(), before)
+        self.assertIn("Time: 414 ms", self.metadata()["message"])
+
     def test_folder_latest_commit_displays_its_best_leetsync_result(self):
         self.submit(12)
         self.repeat(8)

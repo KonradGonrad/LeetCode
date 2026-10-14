@@ -118,7 +118,10 @@ def analyze(history, commits):
         elapsed = sync.runtime(message)
         if message.startswith("Added README.md file for "):
             helper = sync.readme_identity(history.root, sha)
-            if helper and not paths and index:
+            statement_only = all(sync.task_root(path) is not None
+                                 and sync.task_root(path).name == helper
+                                 and Path(path).name == "README.md" for path in paths)
+            if helper and statement_only and tasks == previous_tasks and index:
                 drops.add(sha)
                 report["removed_readme_helpers"] += 1
         managed = any(line.startswith(sync.VERSION) for line in message.splitlines())

@@ -94,6 +94,27 @@ class SyncHistoryTests(GitFixture):
         self.assertEqual(self.run_sync(), head)
         self.assertEqual(self.git("status", "--porcelain"), "")
 
+    def test_readme_reupload_does_not_split_identical_solution_versions(self):
+        self.submit(415)
+        self.run_sync()
+        self.write("solutions/1-example/README.md", "Difficulty: Easy\n")
+        self.commit("Added README.md file for Example")
+        self.write("solutions/1-example/solution.py", "pass\n")
+        self.commit("Time: 414 ms - LeetSync")
+        self.run_sync()
+        self.assertEqual(len(self.versions()), 1)
+        self.assertIn("Time: 414 ms", self.metadata()["message"])
+
+    def test_readme_helper_with_manual_notes_remains_a_boundary(self):
+        self.submit(415)
+        self.run_sync()
+        self.write("solutions/Easy/1-example/notes.ipynb", '{"personal": true}\n')
+        self.commit("Added README.md file for Example")
+        self.submit(414)
+        self.run_sync()
+        self.assertEqual(len(self.versions()), 2)
+        self.assertIn("Added README.md file for Example", self.git("log", "--format=%s"))
+
     def test_changed_code_creates_version_even_when_slower_and_revert_is_new(self):
         for ms, code in ((8, "A\n"), (15, "B\n"), (11, "B\n"), (20, "A\n")):
             self.submit(ms, code)

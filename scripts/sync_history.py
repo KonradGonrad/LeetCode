@@ -263,7 +263,18 @@ def process(root, base, pending, offline):
                 raise ValueError(f"Unrecognized LeetSync runtime in {original}")
             if not paths and readme_identity(root, original) is not None:
                 continue
+            # LeetSync reuploads the statement before the solution. Treat only
+            # a verified, statement-only helper as part of that upload. The
+            # complete normalized snapshot still detects material changes.
+            helper = readme_identity(root, original)
+            statement_helper = helper is not None and all(
+                task_root(path) is not None
+                and task_root(path).name == helper
+                and Path(path).name == "README.md" for path in paths
+            )
             apply_paths(root, original, paths)
+            if statement_helper:
+                continue
             for folder in roots - {None}:
                 if folder.name in records:
                     records[folder.name]["eligible"] = False
