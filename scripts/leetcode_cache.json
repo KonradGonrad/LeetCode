@@ -220,6 +220,14 @@
             "Prefix Sum"
         ]
     },
+    "remove-duplicates-from-sorted-array": {
+        "fetched_at": "2026-10-14T15:22:16.687363+00:00",
+        "status": "ok",
+        "tags": [
+            "Array",
+            "Two Pointers"
+        ]
+    },
     "remove-element": {
         "fetched_at": "2026-10-05T12:51:56.913052+00:00",
         "status": "ok",
