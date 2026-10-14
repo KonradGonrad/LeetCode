@@ -4,6 +4,10 @@ import argparse
 from pathlib import Path
 import subprocess
 import tempfile
+import sys
+
+# Historical revisions track bytecode; imports must leave the checkout clean.
+sys.dont_write_bytecode = True
 
 if __package__:
     from . import migrate_history, sync_history as sync

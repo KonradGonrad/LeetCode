@@ -2,6 +2,8 @@
 
 from pathlib import Path
 import subprocess
+import shutil
+import sys
 import tempfile
 from unittest.mock import patch
 
@@ -19,6 +21,19 @@ class PublishTests(GitFixture):
         self.git("remote", "add", "origin", str(self.remote))
         self.submit(415)
         self.git("push", "origin", "test")
+
+    def test_cli_import_does_not_modify_tracked_bytecode(self):
+        for source in (Path(publisher.__file__).parent).glob("*.py"):
+            shutil.copyfile(source, self.root / "scripts" / source.name)
+        cache = self.root / "scripts/__pycache__" / f"activity.{sys.implementation.cache_tag}.pyc"
+        cache.parent.mkdir(exist_ok=True)
+        cache.write_bytes(b"obsolete tracked bytecode")
+        self.write(".gitignore", "__pycache__/\n")
+        self.git("add", "-f", str(cache.relative_to(self.root)))
+        self.commit("Track legacy bytecode")
+        subprocess.run([sys.executable, "-c", "import sys; sys.pycache_prefix = None; from scripts import publish_history"],
+                       cwd=self.root, check=True)
+        self.assertEqual(self.git("status", "--porcelain"), "")
 
     def test_race_rebuilds_and_keeps_concurrent_upload(self):
         original = sync.synchronize
