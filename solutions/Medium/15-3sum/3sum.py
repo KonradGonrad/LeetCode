@@ -9,10 +9,14 @@ class Solution:
         n = len(nums) # number of elements - total
         nums.sort() # sorting for better iteration
 
-        sums = () # result set that holds combinations without duplicates
+        sums = []
 
         # in the range of the len(nums) - 2, because we then just search 2 left digits, so that whats left are our x1 and x2
         for idx in range(n - 2):
+          # Because we sorted nums we got greater digits on the right hand side of our nums[idx], so we cannot get 0 from all positive numbers
+          if nums[idx] > 0:
+            break
+
           if idx > 0 and nums[idx] == nums[idx - 1]:
             continue
 
@@ -29,7 +33,7 @@ class Solution:
 
             # if we got a match we add our combination and both increments x1 and decrements x2
             if currentSum == searchedValue:
-              sums += ([nums[idx], nums[x1], nums[x2]],)
+              sums.append([nums[idx], nums[x1], nums[x2]])
             
               x1 += 1
               x2 -= 1
@@ -44,4 +48,4 @@ class Solution:
             else:
               x2 -= 1
 
-        return list(sums)
+        return sums
