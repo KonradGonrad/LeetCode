@@ -42,6 +42,15 @@
             "Simulation"
         ]
     },
+    "container-with-most-water": {
+        "fetched_at": "2026-10-15T13:16:03.815801+00:00",
+        "status": "ok",
+        "tags": [
+            "Array",
+            "Two Pointers",
+            "Greedy"
+        ]
+    },
     "contains-duplicate": {
         "fetched_at": "2026-10-05T12:51:51.692734+00:00",
         "status": "ok",
