@@ -270,6 +270,15 @@
             "String"
         ]
     },
+    "rotate-array": {
+        "fetched_at": "2026-10-15T13:06:42.105788+00:00",
+        "status": "ok",
+        "tags": [
+            "Array",
+            "Math",
+            "Two Pointers"
+        ]
+    },
     "rotate-image": {
         "fetched_at": "2026-10-05T12:51:57.538189+00:00",
         "status": "ok",
