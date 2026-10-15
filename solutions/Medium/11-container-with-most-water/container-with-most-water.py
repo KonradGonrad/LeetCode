@@ -7,14 +7,27 @@ class Solution:
         rightBar = len(heights) - 1
         
         while leftBar < rightBar:
-            area = min(heights[leftBar], heights[rightBar]) * (rightBar - leftBar)
-            max_area = max(max_area, area)
+            h_left, h_right = heights[leftBar], heights[rightBar]
 
-            if heights[leftBar] < heights[rightBar]:
+            if h_left < h_right:
+              area = h_left * (rightBar - leftBar)
+
+              if area > max_area:
+                max_area = area
+
+              while leftBar < rightBar and heights[leftBar] <= h_left:
                 leftBar += 1
+
             else:
+
+              area = h_right * (rightBar - leftBar)
+
+              if area > max_area:
+                    max_area = area
+
+              while rightBar > leftBar and heights[rightBar] <= h_right:
                 rightBar -= 1
-        
+
         return max_area
           
 
