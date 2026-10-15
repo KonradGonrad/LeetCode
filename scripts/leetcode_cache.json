@@ -346,6 +346,17 @@
             "Simulation"
         ]
     },
+    "trapping-rain-water": {
+        "fetched_at": "2026-10-15T17:00:21.386352+00:00",
+        "status": "ok",
+        "tags": [
+            "Array",
+            "Two Pointers",
+            "Dynamic Programming",
+            "Stack",
+            "Monotonic Stack"
+        ]
+    },
     "two-sum": {
         "fetched_at": "2026-10-05T12:51:58.682971+00:00",
         "status": "ok",
