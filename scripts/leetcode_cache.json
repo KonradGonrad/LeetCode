@@ -223,6 +223,14 @@
             "String"
         ]
     },
+    "min-stack": {
+        "fetched_at": "2026-11-02T17:22:10.648199+00:00",
+        "status": "ok",
+        "tags": [
+            "Stack",
+            "Design"
+        ]
+    },
     "plus-one": {
         "fetched_at": "2026-10-05T12:51:55.777634+00:00",
         "status": "ok",
