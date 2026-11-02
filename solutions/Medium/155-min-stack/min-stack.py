@@ -4,26 +4,26 @@ class MinStack:
         self.stack = [
             # (value, min)
         ]
+        self.minStack = [
 
-    def _getMin(self, value) -> int:
-        if len(self.stack) == 0:
-            return value
-
-        else:
-            curr = self.stack[-1][1]
-            return curr if curr < value else value
+        ]
 
     def push(self, value: int) -> None:
-        self.stack.append((value, self._getMin(value)))
+        self.stack.append(value)
+
+        if not self.minStack or value <= self.minStack[-1]:
+            self.minStack.append(value)
 
     def pop(self) -> None:
-        self.stack.pop(-1)
+        # it do the pop inplace so its already popped out
+        if self.stack.pop(-1) == self.minStack[-1]:
+            self.minStack.pop(-1)
 
     def top(self) -> int:
-        return self.stack[-1][0]
+        return self.stack[-1]
 
     def getMin(self) -> int:
-        return self.stack[-1][1]
+        return self.minStack[-1]
         
 
 
